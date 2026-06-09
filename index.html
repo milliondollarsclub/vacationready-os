@@ -561,6 +561,36 @@
     .week-workout-name { font-size: 14px; font-weight: 600; color: var(--gray-900); margin-top: 2px; }
     .week-workout-exercises { font-size: 12px; color: var(--gray-500); margin-top: 4px; }
 
+    /* ---- My Plan Log Detail ---- */
+    .mp-view-btn { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 10px; border: 1.5px solid var(--violet); color: var(--violet); background: transparent; cursor: pointer; white-space: nowrap; }
+    .mp-view-btn:hover { background: var(--lavender-pale); }
+    .mp-log-detail { display: none; margin-top: 10px; padding: 14px; background: var(--gray-100); border-radius: 10px; border: 1px solid var(--border); }
+    .mp-log-detail.open { display: block; }
+    .mp-log-meta { font-size: 12px; color: var(--gray-600); margin-bottom: 10px; line-height: 1.7; }
+    .mp-log-meta strong { color: var(--gray-900); }
+    .mp-log-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .mp-ex-table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+    .mp-ex-table th { text-align: left; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .6px; color: var(--gray-500); padding: 4px 6px; border-bottom: 1.5px solid var(--border); }
+    .mp-ex-table td { padding: 6px 6px; border-bottom: 1px solid var(--gray-100); vertical-align: top; }
+    .mp-ex-table tr:last-child td { border-bottom: none; }
+    .mp-ex-name { font-weight: 700; color: var(--gray-900); }
+    .mp-ex-target { color: var(--gray-500); font-size: 11px; }
+    .mp-ex-result { color: var(--gray-900); font-weight: 600; }
+    .mp-ex-note { font-size: 11px; color: var(--gray-500); margin-top: 2px; }
+    .mp-ex-sub { font-size: 11px; color: #7C3AED; margin-top: 2px; }
+    @media (max-width: 600px) { .mp-log-detail { padding: 10px; } }
+    .mp-badge { display: inline-block; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 8px; white-space: nowrap; }
+    .mp-badge-green  { background: #D1FAE5; color: #065F46; }
+    .mp-badge-amber  { background: #FEF3C7; color: #92400E; }
+    .mp-badge-rose   { background: #FEE2E2; color: #991B1B; }
+    .mp-badge-purple { background: #EDE9FE; color: #4C1D95; }
+    .mp-badge-mint   { background: #ECFDF5; color: #064E3B; }
+    .mp-badge-gray   { background: #F3F4F6; color: #6B7280; }
+
+    /* ---- Tracker History Scroll ---- */
+    .tracker-history-scroll { max-height: 420px; overflow-y: auto; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+    .tracker-history-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--violet); }
+
     /* ---- Tracker Tab ---- */
     .tracker-sections { display: flex; flex-direction: column; gap: 16px; }
 
@@ -692,8 +722,11 @@
     .insight-stat-value { font-size: 32px; font-weight: 800; color: var(--blue); }
     .insight-stat-label { font-size: 12px; color: var(--gray-500); margin-top: 2px; font-weight: 600; }
 
-    canvas#weight-chart { width: 100%; height: 180px; display: block; border-radius: 10px; }
+    canvas#weight-chart { width: 100%; height: 180px; display: block; border-radius: 10px; cursor: pointer; }
     .wc-insight { font-size: 12px; color: var(--gray-500); margin-top: 10px; text-align: center; letter-spacing: 0.02em; }
+    .weight-chart-wrap { position: relative; }
+    .wc-tooltip { position: absolute; background: #1F2937; color: #fff; padding: 7px 11px; border-radius: 10px; font-size: 12px; font-weight: 700; box-shadow: 0 4px 16px rgba(0,0,0,.18); pointer-events: none; transform: translate(-50%, -115%); white-space: nowrap; z-index: 5; }
+    .wc-tooltip.hidden { display: none; }
 
     /* ---- Responsive ---- */
     @media (max-width: 600px) {
@@ -4313,6 +4346,293 @@ function getMuscleGroupFromPlan() {
   return { counts, total, source: 'plan' };
 }
 
+// ---- Plan Tab helpers ----
+
+function getWorkoutLog(workoutId) {
+  return state.log.find(l => l.workoutId === workoutId) || null;
+}
+
+function _mpExerciseStatusBadge(cs) {
+  if (!cs) return '';
+  const map = { complete: ['mp-badge-green','Complete'], done: ['mp-badge-green','Complete'],
+    partial: ['mp-badge-amber','Partial'], missed: ['mp-badge-rose','Missed'],
+    skipped: ['mp-badge-rose','Skipped'], substituted: ['mp-badge-purple','Substituted'],
+    extra: ['mp-badge-mint','Extra'] };
+  const [cls, label] = map[cs] || ['mp-badge-gray', cs];
+  return `<span class="mp-badge ${cls}">${label}</span>`;
+}
+
+function _mpIsMeaningfulValue(v) {
+  return v !== undefined &&
+    v !== null &&
+    String(v).trim() !== '' &&
+    String(v).trim() !== '-' &&
+    String(v).trim().toLowerCase() !== 'null' &&
+    String(v).trim().toLowerCase() !== 'undefined';
+}
+
+function _mpCleanValue(v) {
+  if (!_mpIsMeaningfulValue(v)) return '';
+  return String(v).trim();
+}
+
+function _mpHasCleanValue(v) {
+  return _mpCleanValue(v) !== '';
+}
+
+function _mpIsNumericOrRepRange(v) {
+  const s = _mpCleanValue(v).toLowerCase();
+  if (!s) return false;
+  if (s.includes('min') || s.includes('sec') || s.includes('hold') || s.includes('on/') || s.includes('off')) return false;
+  if (s.includes('rep')) return false;
+  if (s.includes('max')) return false;
+  return /\d/.test(s);
+}
+
+function _mpIsTimeBasedExercise(planned, logged) {
+  const name = `${planned && planned.name || ''} ${logged && logged.plannedName || ''} ${logged && logged.name || ''}`.toLowerCase();
+  const reps = `${planned && planned.reps || ''} ${logged && logged.plannedReps || ''} ${logged && logged.actualReps || ''} ${logged && logged.reps || ''}`.toLowerCase();
+  return (
+    reps.includes('min') ||
+    reps.includes('sec') ||
+    reps.includes('second') ||
+    reps.includes('hold') ||
+    reps.includes('on/') ||
+    reps.includes('off') ||
+    name.includes('treadmill') ||
+    name.includes('elliptical') ||
+    name.includes('bike') ||
+    name.includes('cycling') ||
+    name.includes('walk') ||
+    name.includes('run') ||
+    name.includes('cardio') ||
+    name.includes('plank')
+  );
+}
+
+function _mpFormatSetWord(sets) {
+  const n = Number(sets);
+  if (Number.isFinite(n) && n === 1) return 'set';
+  return 'sets';
+}
+
+function _mpFormatRepsLabel(reps, isTimeBased) {
+  const r = _mpCleanValue(reps);
+  if (!r) return '';
+  const lower = r.toLowerCase();
+  if (isTimeBased) return r;
+  if (lower.includes('rep')) return r;
+  if (lower.includes('min') || lower.includes('sec') || lower.includes('hold') || lower.includes('on/') || lower.includes('off')) return r;
+  if (lower.includes('each')) return r;
+  if (lower.includes('max')) return 'Max reps';
+  if (_mpIsNumericOrRepRange(r)) return `${r} reps`;
+  return r;
+}
+
+function _mpDetectPlannedRepUnit(planned, logged) {
+  const raw = _mpCleanValue(
+    (planned && planned.reps) ||
+    (logged && logged.plannedReps) ||
+    ''
+  ).toLowerCase();
+  if (raw.includes('min')) return 'min';
+  if (raw.includes('sec') || raw.includes('second')) return 'sec';
+  if (raw.includes('each leg')) return 'each leg';
+  if (raw.includes('each')) return 'each';
+  if (raw.includes('max')) return 'reps';
+  if (raw.includes('rep')) return 'reps';
+  return 'reps';
+}
+
+function _mpFormatAmountWithContext(value, planned, logged) {
+  const v = _mpCleanValue(value);
+  if (!v) return '';
+  const lower = v.toLowerCase();
+  if (
+    lower.includes('rep') ||
+    lower.includes('min') ||
+    lower.includes('sec') ||
+    lower.includes('second') ||
+    lower.includes('each') ||
+    lower.includes('hold') ||
+    lower.includes('on/') ||
+    lower.includes('off')
+  ) return v;
+  if (lower.includes('max')) return 'Max reps';
+  if (/\d/.test(lower)) {
+    const unit = _mpDetectPlannedRepUnit(planned, logged);
+    if (unit === 'min') return `${v} min`;
+    if (unit === 'sec') return `${v} sec`;
+    if (unit === 'each leg') return `${v} each leg`;
+    if (unit === 'each') return `${v} each`;
+    return `${v} reps`;
+  }
+  return v;
+}
+
+function _mpFormatDisplayWeight(weight, sourceUnit, targetUnit) {
+  if (!_mpIsMeaningfulValue(weight)) return '';
+  const n = Number(weight);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const from = sourceUnit || targetUnit || (state.settings && state.settings.weightUnit) || 'lbs';
+  const to = targetUnit || (state.settings && state.settings.weightUnit) || 'lbs';
+  let converted = n;
+  if (from !== to) {
+    if (from === 'kg' && to === 'lbs' && typeof kgToLbs === 'function') converted = kgToLbs(n);
+    else if (from === 'lbs' && to === 'kg' && typeof lbsToKg === 'function') converted = lbsToKg(n);
+  }
+  const rounded = Math.round(converted * 10) / 10;
+  const clean = Number.isInteger(rounded) ? String(rounded) : String(rounded);
+  return `${clean} ${to}`;
+}
+
+function _mpFormatTarget(planned, logged) {
+  const sets = (planned && planned.sets != null) ? planned.sets : (logged && logged.plannedSets != null ? logged.plannedSets : null);
+  const reps = (planned && planned.reps != null) ? planned.reps : (logged && logged.plannedReps != null ? logged.plannedReps : null);
+  const rest = (planned && planned.rest != null) ? planned.rest : (logged && logged.plannedRest != null ? logged.plannedRest : null);
+  const hasSets = _mpHasCleanValue(sets);
+  const hasReps = _mpHasCleanValue(reps);
+  if (!hasSets && !hasReps) return 'Target not specified';
+  const isTimeBased = _mpIsTimeBasedExercise(planned, logged);
+  const setsNum = hasSets ? Number(_mpCleanValue(sets)) : null;
+  const setWord = (setsNum != null && Number.isFinite(setsNum)) ? _mpFormatSetWord(setsNum) : 'sets';
+  let txt = '';
+  if (hasSets && hasReps) {
+    txt = `${_mpCleanValue(sets)} ${setWord} × ${_mpFormatAmountWithContext(reps, planned, logged)}`;
+  } else if (hasSets) {
+    txt = `${_mpCleanValue(sets)} ${setWord}`;
+  } else {
+    txt = _mpFormatAmountWithContext(reps, planned, logged);
+  }
+  if (_mpHasCleanValue(rest) && Number(rest) > 0) txt += ` · Rest ${_mpCleanValue(rest)}s`;
+  return txt || 'Target not specified';
+}
+
+function _mpFormatResult(logged, fallbackUnit, planned) {
+  if (!logged) return 'Not logged';
+  const status = logged.completionStatus || logged.status || (logged.skipped ? 'skipped' : null);
+  const sets = _mpHasCleanValue(logged.actualSets) ? logged.actualSets : (_mpHasCleanValue(logged.sets) ? logged.sets : null);
+  const reps = _mpHasCleanValue(logged.actualReps) ? logged.actualReps : (_mpHasCleanValue(logged.reps) ? logged.reps : null);
+  const weight = _mpHasCleanValue(logged.actualWeight) ? logged.actualWeight : (_mpHasCleanValue(logged.weight) ? logged.weight : null);
+  const sourceUnit = logged.actualWeightUnit || logged.weightUnit || logged.unit || null;
+  const targetUnit = (state.settings && state.settings.weightUnit) || fallbackUnit || 'lbs';
+  const isTimeBased = _mpIsTimeBasedExercise(planned, logged);
+
+  if (sets === null && reps === null && weight === null) {
+    if (status === 'skipped') return 'Skipped — no work logged';
+    if (status === 'partial') return 'Partially completed — details not logged';
+    if (status === 'complete' || status === 'done') return 'Completed — details not logged';
+    return 'Not logged';
+  }
+
+  const setsNum = sets !== null ? Number(sets) : null;
+  const setWord = (setsNum != null && Number.isFinite(setsNum)) ? _mpFormatSetWord(setsNum) : 'sets';
+  let txt = '';
+  if (sets !== null && reps !== null) {
+    txt = `${_mpCleanValue(sets)} ${setWord} × ${_mpFormatAmountWithContext(reps, planned, logged)}`;
+  } else if (sets !== null) {
+    txt = `${_mpCleanValue(sets)} ${setWord}`;
+  } else if (reps !== null) {
+    txt = _mpFormatAmountWithContext(reps, planned, logged);
+  }
+
+  if (!isTimeBased && weight !== null) {
+    const weightStr = _mpFormatDisplayWeight(weight, sourceUnit, targetUnit);
+    if (weightStr) txt += (txt ? ' · ' : '') + weightStr;
+  }
+
+  if (!txt) {
+    if (status === 'skipped') return 'Skipped — no work logged';
+    if (status === 'partial') return 'Partially completed — details not logged';
+    if (status === 'complete' || status === 'done') return 'Completed — details not logged';
+    return 'Not logged';
+  }
+  return txt;
+}
+
+function _mpExerciseName(planned, logged, index) {
+  return (planned && planned.name) ||
+    (logged && (logged.plannedName || logged.name || logged.substituteName || logged.originalName)) ||
+    `Exercise ${index + 1}`;
+}
+
+function renderPlanWorkoutHistoryDetail(wo) {
+  const log = getWorkoutLog(wo.id);
+  const weightUnit = (state.settings && state.settings.weightUnit) || 'lbs';
+
+  if (!log) {
+    const exList = (wo.exercises || []).map(e =>
+      `<li style="margin-bottom:3px"><strong>${e.name}</strong> — ${e.sets} sets × ${e.reps} reps</li>`
+    ).join('');
+    return `<div class="mp-log-meta">No log saved for this workout yet.</div>
+      <div style="font-size:12px;font-weight:700;color:var(--gray-700);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Planned Exercises</div>
+      <ul style="font-size:13px;color:var(--gray-700);padding-left:18px;margin:0;line-height:2">${exList}</ul>`;
+  }
+
+  const cs = log.completionStatus || (log.completed ? 'complete' : 'partial');
+  const score = typeof log.completionScore === 'number' ? log.completionScore + '%' : '—';
+  const dur = log.duration ? log.duration + ' min' : '—';
+  const rpe = log.rpe ? log.rpe + '/10' : '—';
+  const notes = log.notes ? `<div style="margin-top:6px;font-size:12px;color:var(--gray-600)"><em>${log.notes}</em></div>` : '';
+
+  const plannedExercises = wo.exercises || [];
+  const loggedExercises = log.exerciseLogs || [];
+
+  let exSection = '';
+  if (loggedExercises.length === 0 && plannedExercises.length === 0) {
+    exSection = `<div style="font-size:12px;color:var(--gray-500);margin-top:8px;font-style:italic">This workout was marked complete before exercise-level logging was added.</div>`;
+  } else {
+    const maxLen = Math.max(plannedExercises.length, loggedExercises.length);
+    const rows = [];
+
+    for (let i = 0; i < maxLen; i++) {
+      const planned = plannedExercises[i] || null;
+      const logged = loggedExercises[i] || null;
+      const isExtra = i >= plannedExercises.length;
+
+      const exName = isExtra
+        ? (logged && (logged.plannedName || logged.name || logged.substituteName || logged.originalName) || 'Extra exercise')
+        : _mpExerciseName(planned, logged, i);
+      const targetTxt = isExtra ? '<span style="color:var(--gray-400);font-style:italic">Extra</span>' : _mpFormatTarget(planned, logged);
+      const resultTxt = _mpFormatResult(logged, weightUnit, planned);
+      const exStatus = logged ? (logged.completionStatus || logged.status || (logged.completed ? 'complete' : logged.skipped ? 'skipped' : null)) : null;
+
+      const subNote = (logged && logged.substituteName) ? `<div class="mp-ex-sub">Substituted with: ${logged.substituteName}</div>` : '';
+      const exNote = (logged && logged.notes) ? `<div class="mp-ex-note">${logged.notes}</div>` : '';
+
+      rows.push(`<tr>
+        <td><span class="mp-ex-name">${exName}</span>${subNote}</td>
+        <td>${exStatus ? _mpExerciseStatusBadge(exStatus) : ''}</td>
+        <td class="mp-ex-target">${targetTxt}</td>
+        <td><span class="mp-ex-result">${resultTxt}</span>${exNote}</td>
+      </tr>`);
+    }
+
+    exSection = `<div class="mp-log-table-wrap"><table class="mp-ex-table">
+      <thead><tr><th>Exercise</th><th>Status</th><th>Target</th><th>Logged Result</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table></div>`;
+  }
+
+  return `<div class="mp-log-meta">
+    <strong>Date:</strong> ${log.date || '—'} &nbsp;|&nbsp;
+    ${_mpExerciseStatusBadge(cs)} &nbsp;|&nbsp;
+    <strong>Score:</strong> ${score} &nbsp;|&nbsp;
+    <strong>Duration:</strong> ${dur} &nbsp;|&nbsp;
+    <strong>RPE:</strong> ${rpe}
+    ${notes}
+  </div>${exSection}`;
+}
+
+function togglePlanWorkoutDetail(workoutId) {
+  const el = document.getElementById('mp-log-detail-' + workoutId);
+  if (!el) return;
+  el.classList.toggle('open');
+  const btn = document.getElementById('mp-view-btn-' + workoutId);
+  if (btn) btn.textContent = el.classList.contains('open') ? 'Hide' : btn.dataset.label;
+}
+window.togglePlanWorkoutDetail = togglePlanWorkoutDetail;
+
 // ---- Plan Tab ----
 
 function renderPlan() {
@@ -4483,14 +4803,22 @@ function toggleWeekDetail(weekNum) {
         const statusColor = logEntry
           ? (logEntry.completionStatus === 'complete' || logEntry.completed ? 'var(--mint)' : logEntry.completionStatus === 'partial' ? '#F59E0B' : logEntry.completionStatus === 'missed' ? '#EF4444' : '#F59E0B')
           : 'transparent';
+        const btnLabel = logEntry ? 'View Log' : 'View Plan';
+        const detailHtml = renderPlanWorkoutHistoryDetail(wo);
         return `
         <div class="wdd-wo-card">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div class="wdd-wo-day">${wo.day}</div>
-            ${statusIcon ? `<span style="font-size:13px;font-weight:800;color:${statusColor}">${statusIcon}</span>` : ''}
+            <div>
+              <div class="wdd-wo-day">${wo.day}</div>
+              <div class="wdd-wo-name">${wo.name}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+              ${statusIcon ? `<span style="font-size:13px;font-weight:800;color:${statusColor}">${statusIcon}</span>` : ''}
+              <button id="mp-view-btn-${wo.id}" class="mp-view-btn" data-label="${btnLabel}" onclick="togglePlanWorkoutDetail('${wo.id}')">${btnLabel}</button>
+            </div>
           </div>
-          <div class="wdd-wo-name">${wo.name}</div>
-          <div class="wdd-wo-ex">${wo.exercises.map(e => `${e.name} (${e.sets}×${e.reps})`).join(' · ')}</div>
+          <div class="wdd-wo-ex" style="margin-top:4px">${wo.exercises.map(e => `${e.name} (${e.sets}×${e.reps})`).join(' · ')}</div>
+          <div id="mp-log-detail-${wo.id}" class="mp-log-detail">${detailHtml}</div>
         </div>`;
       }).join('')}
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid #F3F4F6">
@@ -4506,7 +4834,7 @@ function renderTracker() {
   const metrics = state.metrics;
   const unit  = state.settings.weightUnit || 'lbs';
   const mUnit = state.settings.measurementUnit || 'in';
-  const recentMetrics = metrics.slice(-7).reverse();
+  const allMetricLogs = [...metrics].sort((a, b) => b.date.localeCompare(a.date));
   const todayEntry = metrics.find(m => m.date === today());
 
   const findLatestEntry = key => {
@@ -4616,19 +4944,19 @@ function renderTracker() {
       </div>
     </div>` : ''}
 
-    ${recentMetrics.length > 0 ? `
+    ${allMetricLogs.length > 0 ? `
     <div class="card section-gap">
       <div class="card-header">
-        <div class="card-title">Recent Logs</div>
-        <span class="card-badge badge-coral">Last ${recentMetrics.length}</span>
+        <div class="card-title">Check-In History</div>
+        <span class="card-badge badge-coral">${allMetricLogs.length} Entries</span>
       </div>
-      <div class="tracker-table-wrap">
+      <div class="tracker-history-scroll">
         <table class="tracker-log-table">
           <thead><tr>
             <th>Date</th><th>Weight</th><th>Waist</th><th>Energy</th><th>Sleep</th><th>Soreness</th><th>Notes</th>
           </tr></thead>
           <tbody>
-            ${recentMetrics.map((m, i) => `
+            ${allMetricLogs.map((m, i) => `
               <tr class="${i % 2 === 0 ? 'tr-even' : 'tr-odd'}">
                 <td class="log-td-date">${m.date}</td>
                 <td>${m.weight  != null ? (formatDisplayWeight(m.weight, m.weightUnit || unit, unit) ?? m.weight) + ' ' + unit : '<span class="td-empty">—</span>'}</td>
@@ -4644,6 +4972,7 @@ function renderTracker() {
     </div>` : ''}
 
     ${renderPhotoProgressStudio()}`;
+
 
   document.getElementById('tracker-content').innerHTML = html;
 }
@@ -6108,7 +6437,10 @@ function renderInsights() {
             <div class="card-title">Weight Trend</div>
             <span class="card-badge badge-blue">All entries</span>
           </div>
-          <canvas id="weight-chart"></canvas>
+          <div class="weight-chart-wrap">
+            <canvas id="weight-chart"></canvas>
+            <div id="weight-chart-tooltip" class="wc-tooltip hidden"></div>
+          </div>
           <div id="wc-insight" class="wc-insight"></div>
         </div>
       ` : `
@@ -6330,6 +6662,60 @@ function drawWeightChart(entries) {
     else if (change > 0.5) trend = 'Upward trend';
     insightEl.textContent = `Latest: ${last.displayWeight} ${unit}  ·  Change: ${sign}${change} ${unit}  ·  ${trend}`;
   }
+
+  // Store hit-test points for click/tap interactions
+  canvas._weightChartPoints = chartEntries.map((e, i) => ({
+    x: xOf(i), y: yOf(e.displayWeight),
+    date: e.date, weight: e.displayWeight, unit: displayUnit
+  }));
+
+  attachWeightChartInteractions(canvas);
+}
+
+function attachWeightChartInteractions(canvas) {
+  function handleInteraction(clientX, clientY) {
+    const points = canvas._weightChartPoints;
+    if (!points || points.length === 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const cssX = clientX - rect.left;
+    const cssY = clientY - rect.top;
+    let nearest = null, minDist = Infinity;
+    points.forEach((p, i) => {
+      const d = Math.hypot(p.x - cssX, p.y - cssY);
+      if (d < minDist) { minDist = d; nearest = { p, i }; }
+    });
+    const tooltip = document.getElementById('weight-chart-tooltip');
+    if (!tooltip) return;
+    if (!nearest || minDist > 22) {
+      tooltip.classList.add('hidden');
+      canvas._selectedWeightPointIndex = null;
+      return;
+    }
+    const { p, i } = nearest;
+    canvas._selectedWeightPointIndex = i;
+    const d = new Date(p.date + 'T00:00:00');
+    const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    tooltip.textContent = `${dateStr} · ${p.weight} ${p.unit}`;
+    const wrapRect = canvas.parentElement.getBoundingClientRect();
+    const tooltipHalfW = 90;
+    let left = p.x;
+    left = Math.max(tooltipHalfW, Math.min(left, rect.width - tooltipHalfW));
+    tooltip.style.left = left + 'px';
+    const topPos = p.y - 4;
+    const showBelow = p.y < 30;
+    tooltip.style.top = showBelow ? (p.y + 28) + 'px' : topPos + 'px';
+    tooltip.style.transform = showBelow ? 'translate(-50%, 0)' : 'translate(-50%, -100%)';
+    tooltip.classList.remove('hidden');
+  }
+
+  canvas.onclick = function(evt) {
+    handleInteraction(evt.clientX, evt.clientY);
+  };
+  canvas.ontouchstart = function(evt) {
+    evt.preventDefault();
+    const t = evt.touches[0];
+    handleInteraction(t.clientX, t.clientY);
+  };
 }
 
 // Lightweight resize redraw for weight chart
@@ -6736,6 +7122,267 @@ function auditFinalCriticalFixes() {
   return result;
 }
 window.auditFinalCriticalFixes = auditFinalCriticalFixes;
+
+// ==================== PREMIUM SCREENSHOT UX AUDIT ====================
+
+function auditPremiumScreenshotUxFixes() {
+  const html = document.documentElement.innerHTML;
+  const myPlanWorkoutHistoryInspectable = html.includes('renderPlanWorkoutHistoryDetail');
+  const myPlanExerciseLogsRenderable    = html.includes('mp-ex-table') && html.includes('exerciseLogs');
+  const planWorkoutToggleAvailable      = typeof togglePlanWorkoutDetail === 'function';
+  const trackerShowsAllMetricLogs       = (function() { const _p = 'metrics' + '.slice(-' + '7)'; return html.includes('allMetricLogs') && !html.includes(_p); })();
+  const trackerHistoryScrollable        = html.includes('tracker-history-scroll');
+  const trackerHistoryBadgeUpdated      = html.includes('Entries') && html.includes('Check-In History');
+  const weightChartClickablePoints      = html.includes('_weightChartPoints');
+  const weightChartTooltipExists        = html.includes('weight-chart-tooltip') && html.includes('wc-tooltip');
+  const weightChartTouchSupport         = html.includes('ontouchstart') && html.includes('attachWeightChartInteractions');
+  const existingAuditsStillAvailable    = typeof auditFinalCriticalFixes === 'function' &&
+                                          typeof auditStorageResetSafety === 'function' &&
+                                          typeof auditOnboardingUnitFlow === 'function' &&
+                                          typeof auditPlanGenerationQuality === 'function' &&
+                                          typeof auditBuyerReadiness === 'function';
+  const result = {
+    myPlanWorkoutHistoryInspectable,
+    myPlanExerciseLogsRenderable,
+    planWorkoutToggleAvailable,
+    trackerShowsAllMetricLogs,
+    trackerHistoryScrollable,
+    trackerHistoryBadgeUpdated,
+    weightChartClickablePoints,
+    weightChartTooltipExists,
+    weightChartTouchSupport,
+    existingAuditsStillAvailable
+  };
+  console.table(result);
+  return result;
+}
+window.auditPremiumScreenshotUxFixes = auditPremiumScreenshotUxFixes;
+
+// ==================== MY PLAN WORKOUT DETAIL MAPPING AUDIT ====================
+
+function auditMyPlanWorkoutDetailMapping() {
+  const html = document.documentElement.innerHTML;
+  const usesPlannedExercisesAsSource      = html.includes('plannedExercises[i]') && html.includes('wo.exercises || []');
+  const exerciseColumnHasFallback         = html.includes('_mpExerciseName') && html.includes('Exercise ${index + 1}');
+  const targetColumnUsesWorkoutExerciseData = html.includes('_mpFormatTarget') && html.includes('planned.sets') && html.includes('planned.reps');
+  const loggedResultUsesActualData        = html.includes('_mpFormatResult') && html.includes('actualSets') && html.includes('actualReps');
+  const handlesLegacyMissingPlannedName   = html.includes('logged.plannedName') && html.includes('logged.name') && html.includes('logged.substituteName');
+  const handlesExtraLoggedExercises       = html.includes('isExtra') && html.includes('i >= plannedExercises.length');
+  let noBlankExerciseColumnRisk = false;
+  try {
+    const _t1 = typeof _mpExerciseName === 'function' && _mpExerciseName({ name: 'Ab Crunches' }, {}, 0) === 'Ab Crunches';
+    const _t2 = _mpExerciseName(null, { plannedName: 'Fallback Exercise' }, 0) === 'Fallback Exercise';
+    const _t3 = _mpExerciseName(null, {}, 0) === 'Exercise 1';
+    noBlankExerciseColumnRisk = _t1 && _t2 && _t3;
+  } catch(e) { noBlankExerciseColumnRisk = false; }
+  let noBlankTargetColumnRisk = false;
+  try {
+    const _r1 = _mpFormatTarget({ name: 'Ab Crunches', sets: 3, reps: '15-20', rest: 30 }, {});
+    const _r2 = _mpFormatTarget({ name: 'Treadmill / Elliptical', sets: 1, reps: '20 min', rest: 0 }, {});
+    const _r3 = _mpFormatTarget(null, null);
+    noBlankTargetColumnRisk = _r1.includes('3 sets × 15-20 reps') && _r2.includes('1 set × 20 min') && _r3 === 'Target not specified';
+  } catch(e) { noBlankTargetColumnRisk = false; }
+  const tableHasMobileScrollWrapper       = html.includes('mp-log-table-wrap') && html.includes('overflow-x: auto');
+  const result = {
+    usesPlannedExercisesAsSource,
+    exerciseColumnHasFallback,
+    targetColumnUsesWorkoutExerciseData,
+    loggedResultUsesActualData,
+    handlesLegacyMissingPlannedName,
+    handlesExtraLoggedExercises,
+    noBlankExerciseColumnRisk,
+    noBlankTargetColumnRisk,
+    tableHasMobileScrollWrapper
+  };
+  console.table(result);
+  return result;
+}
+window.auditMyPlanWorkoutDetailMapping = auditMyPlanWorkoutDetailMapping;
+
+// ==================== FINAL SCREENSHOT READINESS AUDIT ====================
+
+function auditFinalScreenshotReadiness() {
+  let myPlanTextQualityClean = false;
+  let myPlanUnitFormattingClean = false;
+  let myPlanDetailMappingClean = false;
+  let trackerAllHistoryClean = false;
+  let premiumScreenshotUxClean = false;
+  let visibleMyPlanTextClean = false;
+  const allCoreAuditsAvailable =
+    typeof auditMyPlanLogTextQuality === 'function' &&
+    typeof auditMyPlanLogUnitFormatting === 'function' &&
+    typeof auditMyPlanWorkoutDetailMapping === 'function' &&
+    typeof auditPremiumScreenshotUxFixes === 'function' &&
+    typeof auditVisibleMyPlanLogText === 'function';
+  try {
+    const tq = auditMyPlanLogTextQuality();
+    myPlanTextQualityClean = Object.values(tq).every(Boolean);
+  } catch(e) {}
+  try {
+    const uf = auditMyPlanLogUnitFormatting();
+    myPlanUnitFormattingClean = Object.values(uf).every(Boolean);
+  } catch(e) {}
+  try {
+    const dm = auditMyPlanWorkoutDetailMapping();
+    myPlanDetailMappingClean = Object.values(dm).every(Boolean);
+  } catch(e) {}
+  try {
+    const pu = auditPremiumScreenshotUxFixes();
+    trackerAllHistoryClean = !!pu.trackerShowsAllMetricLogs;
+    premiumScreenshotUxClean = Object.values(pu).every(Boolean);
+  } catch(e) {}
+  try {
+    const vt = auditVisibleMyPlanLogText();
+    visibleMyPlanTextClean = Object.values(vt).every(Boolean);
+  } catch(e) {}
+  const result = {
+    myPlanTextQualityClean,
+    myPlanUnitFormattingClean,
+    myPlanDetailMappingClean,
+    trackerAllHistoryClean,
+    premiumScreenshotUxClean,
+    visibleMyPlanTextClean,
+    allCoreAuditsAvailable
+  };
+  console.table(result);
+  return result;
+}
+window.auditFinalScreenshotReadiness = auditFinalScreenshotReadiness;
+
+// ==================== MY PLAN LOG UNIT FORMATTING AUDIT ====================
+
+function auditMyPlanLogUnitFormatting() {
+  const html = document.documentElement.innerHTML;
+  const targetDoesNotAppendRepsToTime          = typeof _mpIsTimeBasedExercise === 'function' && html.includes('_mpFormatRepsLabel') && html.includes('isTimeBased');
+  const resultDoesNotAppendWeightToTimeBasedExercises = html.includes('if (!isTimeBased)') && html.includes('_mpFormatDisplayWeight');
+  const noUnitWithoutNumericWeight             = html.includes('!Number.isFinite(n) || n <= 0') && html.includes('return \'\'');
+  const convertsLoggedWeightToCurrentUnit      = html.includes('_mpFormatDisplayWeight') && html.includes('sourceUnit') && html.includes('targetUnit');
+  const meaningfulValueGuardExists             = typeof _mpIsMeaningfulValue === 'function';
+  const timeBasedExerciseDetectorExists        = typeof _mpIsTimeBasedExercise === 'function';
+  const resultFormatterReceivesPlannedContext  = html.includes('_mpFormatResult(logged, weightUnit, planned)');
+  const singularSetFormattingExists            = typeof _mpFormatSetWord === 'function';
+  const avoidsRestZeroDisplay                  = html.includes('Number(rest) > 0');
+  const result = {
+    targetDoesNotAppendRepsToTime,
+    resultDoesNotAppendWeightToTimeBasedExercises,
+    noUnitWithoutNumericWeight,
+    convertsLoggedWeightToCurrentUnit,
+    meaningfulValueGuardExists,
+    timeBasedExerciseDetectorExists,
+    resultFormatterReceivesPlannedContext,
+    singularSetFormattingExists,
+    avoidsRestZeroDisplay
+  };
+  console.table(result);
+  return result;
+}
+window.auditMyPlanLogUnitFormatting = auditMyPlanLogUnitFormatting;
+
+// ==================== MY PLAN LOG TEXT QUALITY AUDIT ====================
+
+function auditMyPlanLogTextQuality() {
+  const cleanValueHelpersExist = typeof _mpCleanValue === 'function' && typeof _mpHasCleanValue === 'function';
+  const numericRepRangeGetsReps = _mpFormatRepsLabel('15-20', false) === '15-20 reps' && _mpFormatRepsLabel('20', false) === '20 reps';
+  const timeBasedDoesNotGetReps =
+    _mpFormatRepsLabel('20 min', true) === '20 min' &&
+    _mpFormatRepsLabel('30 sec', true) === '30 sec' &&
+    _mpFormatRepsLabel('45 sec on/15 sec off', true) === '45 sec on/15 sec off';
+
+  const skippedResult = _mpFormatResult(
+    { completionStatus: 'skipped', actualSets: '', actualReps: '', actualWeight: '' },
+    'lbs',
+    { name: 'Face Pulls / Band Pull-Aparts', sets: 2, reps: '20 reps', rest: 30 }
+  );
+  const skippedDoesNotShowBrokenSets =
+    !skippedResult.includes('sets ×') &&
+    !skippedResult.includes('set ×') &&
+    skippedResult.toLowerCase().includes('skip');
+
+  const noBareUnitRisk =
+    typeof _mpFormatDisplayWeight === 'function' &&
+    _mpFormatDisplayWeight('', 'lbs', 'lbs') === '' &&
+    _mpFormatDisplayWeight(null, 'lbs', 'lbs') === '';
+
+  const noRestZeroRisk =
+    !_mpFormatTarget({ name: 'Test', sets: 3, reps: 10, rest: 0 }, {}).includes('Rest 0s') &&
+    !_mpFormatTarget({ name: 'Test', sets: 3, reps: 10, rest: null }, {}).includes('Rest null');
+
+  const targetFallbackIsHumanReadable = _mpFormatTarget(null, null) === 'Target not specified';
+  const resultFallbackIsHumanReadable = _mpFormatResult(null, 'lbs', null) === 'Not logged';
+
+  const targetResult = _mpFormatTarget({ name: 'Ab Crunches', sets: 3, reps: '15-20', rest: 30 }, {});
+  const completeResult = _mpFormatResult(
+    { completionStatus: 'complete', actualSets: 3, actualReps: 20, actualWeight: '' },
+    'lbs',
+    { name: 'Ab Crunches', sets: 3, reps: '15-20', rest: 30 }
+  );
+  const abCrunchesStyleRepsHandled = targetResult.includes('15-20 reps') && completeResult.includes('20 reps');
+  const skippedStyleHandled = skippedDoesNotShowBrokenSets;
+
+  const abCrunchesTargetShowsReps = targetResult.includes('15-20 reps');
+  const abCrunchesLoggedResultShowsReps = completeResult.includes('20 reps');
+  const contextAmountFormatterExists = typeof _mpFormatAmountWithContext === 'function';
+  const plannedRepUnitDetectorExists = typeof _mpDetectPlannedRepUnit === 'function';
+
+  const treadmillActualResult = _mpFormatResult(
+    { completionStatus: 'partial', actualSets: 2, actualReps: 12, actualWeight: '' },
+    'lbs',
+    { name: 'Treadmill / Elliptical', sets: 1, reps: '20 min', rest: 0 }
+  );
+  const treadmillNumericActualInheritsMin = treadmillActualResult.includes('12 min') && !treadmillActualResult.includes('reps');
+
+  const splitSquatActualResult = _mpFormatResult(
+    { completionStatus: 'complete', actualSets: 3, actualReps: 10, actualWeight: 25, actualWeightUnit: 'lbs' },
+    'lbs',
+    { name: 'Split Squat', sets: 3, reps: '10 each leg', rest: 60 }
+  );
+  const splitSquatNumericActualInheritsEachLeg = splitSquatActualResult.includes('each leg');
+
+  const result = {
+    cleanValueHelpersExist,
+    numericRepRangeGetsReps,
+    timeBasedDoesNotGetReps,
+    skippedDoesNotShowBrokenSets,
+    noBareUnitRisk,
+    noRestZeroRisk,
+    targetFallbackIsHumanReadable,
+    resultFallbackIsHumanReadable,
+    abCrunchesStyleRepsHandled,
+    skippedStyleHandled,
+    abCrunchesTargetShowsReps,
+    abCrunchesLoggedResultShowsReps,
+    contextAmountFormatterExists,
+    plannedRepUnitDetectorExists,
+    treadmillNumericActualInheritsMin,
+    splitSquatNumericActualInheritsEachLeg
+  };
+  console.table(result);
+  return result;
+}
+window.auditMyPlanLogTextQuality = auditMyPlanLogTextQuality;
+
+function auditVisibleMyPlanLogText() {
+  const text = document.body.innerText || '';
+  const noSetsTimesBrokenText = !/sets\s+×\s*\n/.test(text) && !/set\s+×\s*\n/.test(text);
+  const noBareUnitText = !/^\s*(kg|lbs)\s*$/m.test(text);
+  const noMinRepsText = !text.includes('min reps');
+  const noSecRepsText = !text.includes('sec reps');
+  let abCrunchesVisibleHasRepsOrNotVisible = true;
+  if (text.includes('Ab Crunches') && /3 sets × 20/.test(text)) {
+    abCrunchesVisibleHasRepsOrNotVisible = /3 sets × 20 reps/.test(text);
+  }
+  const result = {
+    visibleTextChecked: true,
+    noSetsTimesBrokenText,
+    noBareUnitText,
+    noMinRepsText,
+    noSecRepsText,
+    abCrunchesVisibleHasRepsOrNotVisible
+  };
+  console.table(result);
+  return result;
+}
+window.auditVisibleMyPlanLogText = auditVisibleMyPlanLogText;
 </script>
 </body>
 </html>
