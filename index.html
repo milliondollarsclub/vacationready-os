@@ -4187,6 +4187,45 @@ function calcStreak() {
   return streak;
 }
 
+// ==================== DAY STREAK (METRICS-BASED) ====================
+
+function normalizeDateOnly(dateValue) {
+  if (!dateValue) return null;
+  const s = typeof dateValue === 'string' ? dateValue : String(dateValue);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+function addDaysToDateString(dateStr, delta) {
+  const m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return dateStr;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+function getUniqueMetricDates(metrics) {
+  const seen = new Set();
+  (metrics || []).forEach(m => {
+    const d = normalizeDateOnly(m.date);
+    if (d) seen.add(d);
+  });
+  return [...seen].sort();
+}
+
+function calculateDayStreak(metrics) {
+  const dates = getUniqueMetricDates(metrics);
+  if (!dates.length) return 0;
+  const dateSet = new Set(dates);
+  let cursor = dates[dates.length - 1];
+  let streak = 0;
+  while (dateSet.has(cursor)) {
+    streak++;
+    cursor = addDaysToDateString(cursor, -1);
+  }
+  return streak;
+}
+
 function toggleWorkoutDetail(id) {
   const el = document.getElementById('wd-' + id);
   if (el) el.classList.toggle('open');
@@ -6211,7 +6250,7 @@ function renderInsights() {
   // ── Analytics data ─────────────────────────────────────────────
   const weekStats = state.plan.weeks.map(w => getWeekLogStats(w));
   const partialCount = state.log.filter(l => l.completionStatus === 'partial').length;
-  const streak = calcStreak();
+  const streak = calculateDayStreak(state.metrics || []);
 
   // Best week by effort
   let bestWeekNum = null, bestWeekPct = 0;
@@ -6415,7 +6454,7 @@ function renderInsights() {
             <div class="insight-stat-label">Current Week</div>
           </div>
           <div class="insight-stat">
-            <div class="insight-stat-value" style="color:var(--peach)">${calcStreak()}</div>
+            <div class="insight-stat-value" style="color:var(--peach)">${calculateDayStreak(state.metrics || [])}</div>
             <div class="insight-stat-label">Day Streak</div>
           </div>
           ${weightChange !== null ? `
@@ -7199,6 +7238,87 @@ function auditMyPlanWorkoutDetailMapping() {
 }
 window.auditMyPlanWorkoutDetailMapping = auditMyPlanWorkoutDetailMapping;
 
+// ==================== DAY STREAK CALCULATION AUDIT ====================
+
+function auditDayStreakCalculation() {
+  const helperExists = typeof calculateDayStreak === 'function' &&
+    typeof normalizeDateOnly === 'function' &&
+    typeof addDaysToDateString === 'function' &&
+    typeof getUniqueMetricDates === 'function';
+
+  let emptyMetricsReturnsZero = false;
+  let singleDayReturnsOne = false;
+  let consecutiveFiveDaysReturnsFive = false;
+  let gapStopsAtLatestRun = false;
+  let unorderedDatesHandled = false;
+  let duplicateDatesHandled = false;
+  let latestDateAnchorUsed = false;
+
+  try {
+    emptyMetricsReturnsZero = calculateDayStreak([]) === 0;
+    singleDayReturnsOne = calculateDayStreak([{date:'2026-06-09'}]) === 1;
+    consecutiveFiveDaysReturnsFive = calculateDayStreak([
+      {date:'2026-06-05'},{date:'2026-06-06'},{date:'2026-06-07'},
+      {date:'2026-06-08'},{date:'2026-06-09'}
+    ]) === 5;
+    gapStopsAtLatestRun = calculateDayStreak([
+      {date:'2026-06-01'},{date:'2026-06-02'},{date:'2026-06-05'},{date:'2026-06-06'}
+    ]) === 2;
+    unorderedDatesHandled = calculateDayStreak([
+      {date:'2026-06-08'},{date:'2026-06-06'},{date:'2026-06-07'},{date:'2026-06-09'},{date:'2026-06-05'}
+    ]) === 5;
+    duplicateDatesHandled = calculateDayStreak([
+      {date:'2026-06-08'},{date:'2026-06-08'},{date:'2026-06-09'},{date:'2026-06-09'}
+    ]) === 2;
+    // Latest date anchor: imported data where latest date is not today still shows streak
+    latestDateAnchorUsed = calculateDayStreak([
+      {date:'2025-01-01'},{date:'2025-01-02'},{date:'2025-01-03'}
+    ]) === 3;
+  } catch(e) {}
+
+  const currentStateMetricCount = (state && state.metrics) ? state.metrics.length : 0;
+  const currentStateDayStreak = (state && state.metrics) ? calculateDayStreak(state.metrics) : 0;
+
+  // Reasonable if: 0 metrics => 0 streak is fine; many consecutive metrics => streak > 1
+  let currentStateStreakReasonable = false;
+  try {
+    if (currentStateMetricCount === 0) {
+      currentStateStreakReasonable = currentStateDayStreak === 0;
+    } else if (currentStateMetricCount === 1) {
+      currentStateStreakReasonable = currentStateDayStreak === 1;
+    } else {
+      // If there are >= 7 metrics and no gap in latest run, streak should be > 1
+      const dates = getUniqueMetricDates(state.metrics);
+      const lastDate = dates[dates.length - 1];
+      const prevDate = dates[dates.length - 2];
+      const isLastTwoConsecutive = lastDate && prevDate &&
+        addDaysToDateString(prevDate, 1) === lastDate;
+      if (currentStateMetricCount >= 7 && isLastTwoConsecutive) {
+        currentStateStreakReasonable = currentStateDayStreak > 1;
+      } else {
+        currentStateStreakReasonable = currentStateDayStreak >= 1;
+      }
+    }
+  } catch(e) {}
+
+  const result = {
+    helperExists,
+    emptyMetricsReturnsZero,
+    singleDayReturnsOne,
+    consecutiveFiveDaysReturnsFive,
+    gapStopsAtLatestRun,
+    unorderedDatesHandled,
+    duplicateDatesHandled,
+    latestDateAnchorUsed,
+    currentStateStreakReasonable,
+    currentStateMetricCount,
+    currentStateDayStreak
+  };
+  console.table(result);
+  return result;
+}
+window.auditDayStreakCalculation = auditDayStreakCalculation;
+
 // ==================== FINAL SCREENSHOT READINESS AUDIT ====================
 
 function auditFinalScreenshotReadiness() {
@@ -7235,6 +7355,14 @@ function auditFinalScreenshotReadiness() {
     const vt = auditVisibleMyPlanLogText();
     visibleMyPlanTextClean = Object.values(vt).every(Boolean);
   } catch(e) {}
+  let dayStreakCalculationClean = false;
+  try {
+    const ds = auditDayStreakCalculation();
+    dayStreakCalculationClean = !!(ds.helperExists && ds.emptyMetricsReturnsZero &&
+      ds.singleDayReturnsOne && ds.consecutiveFiveDaysReturnsFive &&
+      ds.gapStopsAtLatestRun && ds.unorderedDatesHandled &&
+      ds.duplicateDatesHandled && ds.latestDateAnchorUsed);
+  } catch(e) {}
   const result = {
     myPlanTextQualityClean,
     myPlanUnitFormattingClean,
@@ -7242,6 +7370,7 @@ function auditFinalScreenshotReadiness() {
     trackerAllHistoryClean,
     premiumScreenshotUxClean,
     visibleMyPlanTextClean,
+    dayStreakCalculationClean,
     allCoreAuditsAvailable
   };
   console.table(result);
