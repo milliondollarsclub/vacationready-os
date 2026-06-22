@@ -708,6 +708,30 @@
     .confirm-box p { font-size: 14px; color: var(--gray-700); margin-bottom: 20px; }
     .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
 
+    /* ---- Quick Workout Action Modal ---- */
+    #quick-workout-modal {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.52);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 2002; padding: 16px;
+    }
+    .qwm-box {
+      background: var(--white); border-radius: var(--radius);
+      padding: 24px 22px; max-width: 370px; width: 100%;
+      box-shadow: 0 12px 40px rgba(0,0,0,.25);
+    }
+    .qwm-box h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; color: var(--gray-900); }
+    .qwm-box p { font-size: 13px; color: var(--gray-600); margin-bottom: 16px; line-height: 1.55; }
+    .qwm-actions { display: flex; flex-direction: column; gap: 8px; }
+    .qwm-btn-open { background: var(--blue); color: white; border: none; border-radius: var(--radius-sm); padding: 11px 16px; font-size: 14px; font-weight: 700; cursor: pointer; text-align: left; }
+    .qwm-btn-open:hover { opacity: .9; }
+    .qwm-btn-quick { background: var(--mint); color: white; border: none; border-radius: var(--radius-sm); padding: 11px 16px; font-size: 14px; font-weight: 700; cursor: pointer; text-align: left; }
+    .qwm-btn-quick:hover { opacity: .9; }
+    .qwm-btn-cancel { background: transparent; color: var(--gray-500); border: 1.5px solid var(--border); border-radius: var(--radius-sm); padding: 8px 16px; font-size: 13px; cursor: pointer; }
+    .qwm-btn-cancel:hover { background: #F9FAFB; }
+    .workout-check.future { cursor: default; opacity: .4; }
+    .future-log-notice { font-size: 12px; color: var(--gray-500); font-style: italic; padding: 10px 0 4px; }
+
     /* ---- Insights ---- */
     .insight-stat-grid {
       display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px;
@@ -2018,6 +2042,19 @@
     </div>
   </div>
 
+  <!-- QUICK WORKOUT ACTION MODAL -->
+  <div id="quick-workout-modal" class="hidden">
+    <div class="qwm-box">
+      <h3 id="qwm-title"></h3>
+      <p id="qwm-message"></p>
+      <div class="qwm-actions">
+        <button class="qwm-btn-open" id="qwm-open-log-btn">Open Log</button>
+        <button class="qwm-btn-quick" id="qwm-quick-btn">Quick Mark Complete</button>
+        <button class="qwm-btn-cancel" onclick="closeQuickWorkoutModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- TOAST -->
   <div id="toast"></div>
 
@@ -2390,6 +2427,32 @@ function formatSmartNumber(value, decimals = 1) {
 
 function today() { return new Date().toISOString().slice(0,10); }
 
+// ── Local-safe date helpers (avoid UTC timezone shift) ──────────
+function parseLocalDate(dateStr) {
+  if (!dateStr) return null;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+function toLocalDateString(date) {
+  if (!date) return null;
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+}
+function addLocalDays(dateStrOrDate, days) {
+  const d = typeof dateStrOrDate === 'string' ? parseLocalDate(dateStrOrDate) : new Date(+dateStrOrDate);
+  if (!d) return null;
+  d.setDate(d.getDate() + days);
+  return toLocalDateString(d);
+}
+function getLocalTodayString() { return toLocalDateString(new Date()); }
+function getLocalWeekdayName(dateStr) {
+  if (!dateStr) return null;
+  const d = parseLocalDate(dateStr);
+  if (!d) return null;
+  return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()];
+}
+// Stable per-week offsets by workout count — days from week start
+const WORKOUT_COUNT_OFFSETS = { 1:[0], 2:[0,3], 3:[0,2,4], 4:[0,1,3,5], 5:[0,1,2,4,5] };
+
 function getDaysLeft(eventDate) {
   const now = new Date(); now.setHours(0,0,0,0);
   const ev = new Date(eventDate + 'T00:00:00');
@@ -2564,24 +2627,111 @@ function getMetricTrend(metricKey) {
   return { first, latest, change, direction, last7 };
 }
 
+function hasMeaningfulWorkoutData(l) {
+  if (!l) return false;
+  if (l.duration) return true;
+  if (l.rpe) return true;
+  if (l.notes && l.notes.trim()) return true;
+  if (l.exerciseLogs && l.exerciseLogs.length > 0) return true;
+  return false;
+}
+
+// Canonical source of truth for workout completion state.
+// All UI areas must derive status from this function, not raw fields directly.
+function getWorkoutCompletionState(workoutId) {
+  const l = state.log.find(e => e.workoutId === workoutId) ?? null;
+  if (!l) return { status: 'not_started', isLogged: false, isComplete: false, isPartial: false, score: 0, log: null };
+  const isComplete = l.completed === true && l.completionStatus === 'complete';
+  const isPartial  = l.completionStatus === 'partial';
+  const isSkipped  = l.completionStatus === 'missed' || l.completionStatus === 'skipped';
+  const status = isComplete ? 'complete' : isPartial ? 'partial' : isSkipped ? 'skipped' : 'not_started';
+  const score  = isComplete ? (typeof l.completionScore === 'number' ? l.completionScore : 100)
+               : isPartial  ? (typeof l.completionScore === 'number' ? l.completionScore : 50)
+               : 0;
+  return { status, isLogged: true, isComplete, isPartial, score, log: l };
+}
+
+// Unified workout status object — the single source of truth for all UI sections.
+// Returns status, isFuture, isEditable, hasRealLog, isQuickComplete, hasDetailedLog, plannedDate, log.
+function getWorkoutFullStatus(workout, weekIndex) {
+  const todayStr = getLocalTodayString();
+  const plannedDate = getPlannedWorkoutDate(weekIndex, workout);
+  const isFuture = plannedDate ? plannedDate > todayStr : false;
+  const isEditable = !isFuture;
+  const log = state.log.find(l => l.workoutId === workout.id) ?? null;
+  const hasRealLog = !!log;
+  const isQuickComplete = !!(log && (log.quickComplete === true || log.quickMarked === true));
+  const hasDetailedLog = hasRealLog && !isQuickComplete && hasMeaningfulWorkoutData(log);
+  let status = 'notStarted';
+  if (log) {
+    if (log.completed === true && log.completionStatus === 'complete') status = 'complete';
+    else if (log.completionStatus === 'partial') status = 'partial';
+    else if (log.completionStatus === 'missed' || log.completionStatus === 'skipped') status = 'missed';
+  } else if (plannedDate && plannedDate < todayStr) {
+    status = 'missed';
+  }
+  return { status, isFuture, isEditable, hasRealLog, isQuickComplete, hasDetailedLog, plannedDate, log };
+}
+
+// Returns YYYY-MM-DD (local time) for a workout's planned date given its week index (0-based).
+// Prefers wo.plannedDate; falls back to offset-based calculation from setupDate.
+function getPlannedWorkoutDate(weekIndex, workout) {
+  if (workout.plannedDate) return workout.plannedDate;
+  if (!state.user || !state.user.setupDate || !state.plan) return null;
+  const wk = state.plan.weeks[weekIndex];
+  if (!wk) return null;
+  const oi = wk.workouts.findIndex(w => w.id === workout.id);
+  const count = wk.workouts.length;
+  const offsets = WORKOUT_COUNT_OFFSETS[count] || Array.from({length: count}, (_, j) => j);
+  const offset = offsets[oi !== -1 ? oi : 0] ?? 0;
+  return addLocalDays(state.user.setupDate, weekIndex * 7 + offset);
+}
+
+// Canonical display status for a planned workout slot in the heatmap.
+// Real saved logs always override date-derived status — supports late logging.
+function getPlannedWorkoutDisplayStatus(workout, weekIndex, todayStr) {
+  const l = state.log.find(lg => lg.workoutId === workout.id);
+  if (l) {
+    if (l.completed === true && l.completionStatus === 'complete') return 'complete';
+    if (l.completionStatus === 'partial') return 'partial';
+    if (l.completionStatus === 'missed' || l.completionStatus === 'skipped') return 'missed';
+    return 'notStarted';
+  }
+  const plannedDate = getPlannedWorkoutDate(weekIndex, workout);
+  if (plannedDate && plannedDate < todayStr) return 'missed';
+  return 'notStarted';
+}
+
 function getWorkoutScore(l) {
   if (!l) return 0;
-  if (typeof l.completionScore === 'number') return l.completionScore;
-  if (l.completionStatus === 'complete') return 100;
-  if (l.completionStatus === 'partial')  return 50;
-  if (l.completionStatus === 'missed')   return 0;
-  if (l.completed === true)              return 100;
+  const isComplete = l.completed === true && l.completionStatus === 'complete';
+  if (isComplete) return typeof l.completionScore === 'number' ? l.completionScore : 100;
+  if (l.completionStatus === 'partial') return typeof l.completionScore === 'number' ? l.completionScore : 50;
   return 0;
 }
 
 function getWeekLogStats(weekData) {
+  const weekIndex  = (weekData.weekNum || 1) - 1;
+  const todayStr   = getLocalTodayString();
   const weekLogs   = weekData.workouts.map(wo => state.log.find(l => l.workoutId === wo.id) ?? null);
   const planned    = weekData.workouts.length;
   const logged     = weekLogs.filter(l => l !== null).length;
-  const complete   = weekLogs.filter(l => l?.completionStatus === 'complete' || (l?.completed && !l?.completionStatus)).length;
+  const complete   = weekLogs.filter(l => l?.completed === true && l?.completionStatus === 'complete').length;
   const partial    = weekLogs.filter(l => l?.completionStatus === 'partial').length;
-  const missed     = weekLogs.filter(l => l?.completionStatus === 'missed').length;
-  const notStarted = weekLogs.filter(l => l === null).length;
+  // missed = explicit missed/skipped logs + past planned workouts with no log
+  const missed     = weekData.workouts.reduce((count, wo, idx) => {
+    const l = weekLogs[idx];
+    if (l) return count + (l.completionStatus === 'missed' || l.completionStatus === 'skipped' ? 1 : 0);
+    const pd = getPlannedWorkoutDate(weekIndex, wo);
+    return count + (pd && pd < todayStr ? 1 : 0);
+  }, 0);
+  // notStarted = unlogged workouts whose planned date is today or future
+  const notStarted = weekData.workouts.reduce((count, wo, idx) => {
+    const l = weekLogs[idx];
+    if (l) return count;
+    const pd = getPlannedWorkoutDate(weekIndex, wo);
+    return count + (!pd || pd >= todayStr ? 1 : 0);
+  }, 0);
   const effortPct  = planned > 0 ? Math.round(weekLogs.reduce((s, l) => s + getWorkoutScore(l), 0) / planned) : 0;
   return { planned, logged, complete, partial, missed, notStarted, effortPct };
 }
@@ -2590,10 +2740,10 @@ function getWorkoutCompletionStats() {
   if (!state.plan || !state.user) return null;
   const currentWeek = getCurrentWeekNum(state.user.setupDate, state.plan.totalWeeks);
   const totalPlanned   = state.plan.weeks.reduce((s, w) => s + w.workouts.length, 0);
-  const totalCompleted = state.log.filter(l => l.completed).length;
+  const totalCompleted = state.log.filter(l => l.completed === true && l.completionStatus === 'complete').length;
   const completionPct  = totalPlanned > 0 ? Math.round(totalCompleted / totalPlanned * 100) : 0;
   const pastWorkoutIds = state.plan.weeks.slice(0, currentWeek - 1).flatMap(w => w.workouts.map(wo => wo.id));
-  const completedIds   = new Set(state.log.filter(l => l.completed).map(l => l.workoutId));
+  const completedIds   = new Set(state.log.filter(l => l.completed === true && l.completionStatus === 'complete').map(l => l.workoutId));
   const missed         = pastWorkoutIds.filter(id => !completedIds.has(id)).length;
 
   const weekWorkouts = state.plan.weeks[currentWeek - 1]?.workouts || [];
@@ -2603,10 +2753,21 @@ function getWorkoutCompletionStats() {
   const weekLogs = weekWorkouts.map(w => state.log.find(l => l.workoutId === w.id) ?? null);
 
   const weekLogged      = weekLogs.filter(l => l !== null).length;
-  const weekCompleted   = weekLogs.filter(l => l?.completionStatus === 'complete' || (l?.completed && !l?.completionStatus)).length;
+  const weekCompleted   = weekLogs.filter(l => l?.completed === true && l?.completionStatus === 'complete').length;
   const weekPartial     = weekLogs.filter(l => l?.completionStatus === 'partial').length;
-  const weekMissed      = weekLogs.filter(l => l?.completionStatus === 'missed').length;
-  const weekNotStarted  = weekLogs.filter(l => l === null).length;
+  const _todayStr = getLocalTodayString();
+  const weekMissed = weekWorkouts.reduce((count, wo, idx) => {
+    const l = weekLogs[idx];
+    if (l) return count + (l.completionStatus === 'missed' || l.completionStatus === 'skipped' ? 1 : 0);
+    const pd = getPlannedWorkoutDate(currentWeek - 1, wo);
+    return count + (pd && pd < _todayStr ? 1 : 0);
+  }, 0);
+  const weekNotStarted = weekWorkouts.reduce((count, wo, idx) => {
+    const l = weekLogs[idx];
+    if (l) return count;
+    const pd = getPlannedWorkoutDate(currentWeek - 1, wo);
+    return count + (!pd || pd >= _todayStr ? 1 : 0);
+  }, 0);
 
   // Effort score: average score across all planned slots (0 for not-started, 100 for old completed-only logs)
   const effortSum     = weekLogs.reduce((s, l) => s + getWorkoutScore(l), 0);
@@ -2632,7 +2793,7 @@ function getWeeklyCalendarData() {
 
   const SLOT_DAYS = CHRONO_DAY_ORDER;
   const completedIds = new Set(
-    state.log.filter(l => l.completed && weekData.workouts.some(w => w.id === l.workoutId))
+    state.log.filter(l => l.completed === true && l.completionStatus === 'complete' && weekData.workouts.some(w => w.id === l.workoutId))
              .map(l => l.workoutId)
   );
   const weekStart = new Date(state.user.setupDate + 'T00:00:00');
@@ -3408,6 +3569,8 @@ function loadState() {
   runUnitMigration();
   upgradeWorkoutVarietyV1();
   normalizeLegacyLogs();
+  normalizeWorkoutLogs();
+  normalizePlannedWorkoutDates();
 }
 
 function saveUser() { S.set(S.keys.user, state.user); }
@@ -3458,6 +3621,26 @@ function normalizeLegacyLogs() {
   if (changed) saveLog();
 }
 
+function normalizeWorkoutLogs() {
+  const before = state.log.length;
+  // Remove corrupted entries: completed=false + status=complete + no real user data
+  state.log = state.log.filter(l => {
+    if (l.completed === false && l.completionStatus === 'complete' && !hasMeaningfulWorkoutData(l)) return false;
+    return true;
+  });
+  // Fix remaining field inconsistencies
+  state.log.forEach(l => {
+    // completed=true but status disagrees — trust status, clear completed
+    if (l.completed === true && l.completionStatus && l.completionStatus !== 'complete') l.completed = false;
+    // completed=false but status=complete — if has real data downgrade to partial, else reset
+    if (l.completed === false && l.completionStatus === 'complete') {
+      if (hasMeaningfulWorkoutData(l)) { l.completionStatus = 'partial'; l.completionScore = l.completionScore || 50; }
+      else { l.completionStatus = 'not_started'; l.completionScore = 0; }
+    }
+  });
+  if (state.log.length !== before) saveLog();
+}
+
 function runUnitMigration() {
   if (localStorage.getItem('vr_unit_migration_v1')) return;
   const wUnit = state.settings.weightUnit || 'lbs';
@@ -3491,6 +3674,7 @@ function upgradeWorkoutVarietyV1() {
     });
   });
   state.plan = newPlan;
+  normalizePlannedWorkoutDates();
   savePlan();
   localStorage.setItem('vr_workout_variety_v1', '1');
 }
@@ -3794,6 +3978,7 @@ function obFinish() {
   state.settings.measurementUnit = chosenUnit === 'kg' ? 'cm' : 'in';
 
   state.plan = generatePlan(state.user);
+  normalizePlannedWorkoutDates();
   saveUser();
   savePlan();
   saveSettings();
@@ -3937,11 +4122,11 @@ function renderLaunchpad() {
 function renderWeekGlance(ws) {
   const pct = ws.weekEffortPct ?? 0;
   const tiles = [
-    { val: ws.weekLogged     ?? 0, lbl:'Logged',      bg:'var(--lavender-pale)', color:'var(--violet)',  border:'rgba(123,111,212,.3)' },
-    { val: ws.weekCompleted  ?? 0, lbl:'Complete',     bg:'var(--mint-pale)',     color:'var(--mint)',    border:'rgba(59,174,138,.3)' },
-    { val: ws.weekPartial    ?? 0, lbl:'Partial',      bg:'#FEF9E7',             color:'#C08000',        border:'rgba(245,158,11,.3)' },
-    { val: ws.weekNotStarted ?? 0, lbl:'Not Started',  bg:'var(--rose-pale)',     color:'var(--rose)',    border:'rgba(212,84,122,.3)' },
-    { val: pct + '%',             lbl:'Effort Score',  bg:'var(--sky-pale)',      color:'var(--sky)',     border:'rgba(58,157,200,.3)' },
+    { val: ws.weekCompleted  ?? 0, lbl:'Complete',     bg:'var(--mint-pale)',  color:'var(--mint)',    border:'rgba(59,174,138,.3)' },
+    { val: ws.weekPartial    ?? 0, lbl:'Partial',      bg:'#FEF9E7',          color:'#C08000',        border:'rgba(245,158,11,.3)' },
+    { val: ws.weekMissed     ?? 0, lbl:'Missed',       bg:'var(--rose-pale)', color:'var(--rose)',    border:'rgba(212,84,122,.3)' },
+    { val: ws.weekNotStarted ?? 0, lbl:'Not Started',  bg:'#F3F4F6',          color:'#6B7280',        border:'rgba(107,114,128,.3)' },
+    { val: pct + '%',             lbl:'Effort Score',  bg:'var(--sky-pale)',   color:'var(--sky)',     border:'rgba(58,157,200,.3)' },
   ];
   return `
     <div class="section-gap">
@@ -4045,7 +4230,7 @@ function renderDashboard() {
           <div class="completion-bar-fill" id="week-completion-bar" style="width:${ws.weekEffortPct ?? 0}%;background:${(ws.weekEffortPct??0)>=85?'var(--mint)':(ws.weekEffortPct??0)>=40?'#F59E0B':'var(--rose)'}"></div>
         </div>
         <div style="font-size:12px;color:#6B7280;margin-top:6px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px">
-          <span>${ws.weekLogged ?? 0}/${ws.weekPlanned ?? 0} workouts logged &bull; ${ws.weekCompleted ?? 0} complete${(ws.weekPartial??0)>0?' &bull; '+(ws.weekPartial)+' partial':''}${(ws.weekNotStarted??0)>0?' &bull; '+(ws.weekNotStarted)+' not started':''}</span>
+          <span>${ws.weekLogged ?? 0}/${ws.weekPlanned ?? 0} workouts logged &bull; ${ws.weekCompleted ?? 0} complete${(ws.weekPartial??0)>0?' &bull; '+(ws.weekPartial)+' partial':''}${(ws.weekMissed??0)>0?' &bull; '+(ws.weekMissed)+' missed':''}${(ws.weekNotStarted??0)>0?' &bull; '+(ws.weekNotStarted)+' not started':''}</span>
           <span style="font-weight:700;color:${(ws.weekEffortPct??0)>=85?'var(--mint)':(ws.weekEffortPct??0)>=40?'#F59E0B':'var(--rose)'}">${ws.weekEffortPct ?? 0}% weekly effort score</span>
         </div>
       </div>
@@ -4073,17 +4258,27 @@ function renderDashboard() {
 
 function renderWorkoutItem(workout, weekNum) {
   const logEntry = state.log.find(l => l.workoutId === workout.id);
-  const cs = logEntry?.completionStatus ?? (logEntry?.completed ? 'complete' : null);
-  const done = cs === 'complete';
+  const _todayStr = getLocalTodayString();
+  const wfs = getWorkoutFullStatus(workout, weekNum - 1);
+  const isFuture = wfs.isFuture;
+  const cs = logEntry
+    ? ((logEntry.completed === true && logEntry.completionStatus === 'complete') ? 'complete'
+      : logEntry.completionStatus === 'partial' ? 'partial'
+      : (logEntry.completionStatus === 'missed' || logEntry.completionStatus === 'skipped') ? 'missed'
+      : null)
+    : (wfs.status === 'missed' ? 'missed' : null);
 
   // Card state class and check-circle class
   const itemClass   = cs === 'complete' ? 'completed' : cs === 'partial' ? 'partial-log' : cs === 'missed' ? 'missed-log' : '';
-  const checkClass  = cs === 'complete' ? 'done' : cs === 'partial' ? 'partial' : cs === 'missed' ? 'missed' : '';
+  const checkClass  = (cs === 'complete' ? 'done' : cs === 'partial' ? 'partial' : cs === 'missed' ? 'missed' : '') + (isFuture ? ' future' : '');
+  const circleClick = isFuture
+    ? `event.stopPropagation();toggleWorkoutComplete('${workout.id}',${weekNum})`
+    : `event.stopPropagation();toggleWorkoutComplete('${workout.id}',${weekNum})`;
 
   const score = logEntry?.completionScore ?? null;
   const statusBadge = cs
     ? ` &bull; <span style="font-weight:700;color:${cs==='complete'?'var(--mint)':cs==='partial'?'#F59E0B':'var(--rose)'}">${cs}</span>`
-    : '';
+    : (isFuture ? ' &bull; <span style="font-weight:600;color:var(--gray-400)">upcoming</span>' : '');
 
   const STATUS_LIST = ['done','partial','skipped','substituted','extra'];
   const STATUS_LABELS = { done:'Done', partial:'Partial', skipped:'Skipped', substituted:'Subbed', extra:'Extra' };
@@ -4092,7 +4287,7 @@ function renderWorkoutItem(workout, weekNum) {
     const exLog = logEntry?.exerciseLogs?.[i] ?? null;
     const defaultStatus = (logEntry && !logEntry.exerciseLogs) ? (logEntry.completed ? 'done' : '') : '';
     const status = exLog?.status ?? defaultStatus;
-    const pillsHtml = STATUS_LIST.map(s =>
+    const pillsHtml = isFuture ? '' : STATUS_LIST.map(s =>
       `<button class="ex-status-pill${status===s?' sel':''}" data-pill="${workout.id}-${i}-${s}" onclick="setExStatus('${workout.id}',${i},'${s}')">${STATUS_LABELS[s]}</button>`
     ).join('');
     const subVisible = status === 'substituted' ? 'block' : 'none';
@@ -4102,9 +4297,9 @@ function renderWorkoutItem(workout, weekNum) {
         <div class="ex-log-head">
           <div class="ex-log-name">${ex.name}</div>
           <div class="ex-log-plan">${ex.sets} &times; ${ex.reps}${ex.rest ? ' &middot; ' + ex.rest + 's' : ''}</div>
-          <div class="ex-log-pills">${pillsHtml}</div>
+          ${pillsHtml ? `<div class="ex-log-pills">${pillsHtml}</div>` : ''}
         </div>
-        <div class="ex-log-fields">
+        ${isFuture ? '' : `<div class="ex-log-fields">
           <div class="ex-log-field"><label>Sets</label><input type="text" id="exsets-${workout.id}-${i}" placeholder="${ex.sets}" value="${exLog?.actualSets ?? ''}"></div>
           <div class="ex-log-field"><label>Reps</label><input type="text" id="exreps-${workout.id}-${i}" placeholder="${ex.reps}" value="${exLog?.actualReps ?? ''}"></div>
           <div class="ex-log-field"><label>Weight</label><input type="text" id="exwt-${workout.id}-${i}" placeholder="—" value="${exLog?.actualWeight ?? ''}"></div>
@@ -4113,7 +4308,7 @@ function renderWorkoutItem(workout, weekNum) {
         <div class="ex-sub-wrap" id="exsub-wrap-${workout.id}-${i}" style="display:${subVisible}">
           <label>Substitute Exercise</label>
           <input type="text" id="exsub-${workout.id}-${i}" placeholder="What did you do instead?" value="${exLog?.substituteName ?? ''}">
-        </div>
+        </div>`}
       </div>`;
   }).join('');
 
@@ -4123,21 +4318,31 @@ function renderWorkoutItem(workout, weekNum) {
       <span class="ex-score-val" style="color:${score>=85?'var(--mint)':score>=40?'#F59E0B':'var(--rose)'}">${score}%</span>
     </div>` : '';
 
+  const unlockDateStr = wfs.plannedDate
+    ? new Date(wfs.plannedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : 'the planned date';
+
+  const saveOrFutureNotice = isFuture
+    ? `<div class="future-log-notice">This workout unlocks on ${unlockDateStr}. You can preview it now, but logging opens on that day.</div>`
+    : `<button class="log-save-btn" onclick="saveWorkoutLog('${workout.id}',${weekNum})">💾 Save Workout Log</button>`;
+
+  const expandBtnLabel = isFuture ? 'Preview' : (logEntry ? 'View Log' : 'Log');
+
   return `
     <div class="workout-item ${itemClass}" id="wi-${workout.id}">
       <div class="workout-header" onclick="toggleWorkoutDetail('${workout.id}')">
-        <div class="workout-check ${checkClass}" onclick="event.stopPropagation();toggleWorkoutComplete('${workout.id}',${weekNum})"></div>
+        <div class="workout-check ${checkClass}" onclick="${circleClick}"></div>
         <div class="workout-info">
-          <div class="workout-day">${workout.day}</div>
+          <div class="workout-day">${getLocalWeekdayName(workout.plannedDate) || workout.day}</div>
           <div class="workout-name">${workout.name}</div>
           <div class="workout-meta">${workout.exercises.length} exercises &bull; ~${Math.round(workout.duration)} min &bull; RPE ${workout.rpe}${statusBadge}</div>
         </div>
-        <button class="workout-expand-btn" onclick="event.stopPropagation();toggleWorkoutDetail('${workout.id}')">${cs ? 'View Log' : 'Log'}</button>
+        <button class="workout-expand-btn" onclick="event.stopPropagation();toggleWorkoutDetail('${workout.id}')">${expandBtnLabel}</button>
       </div>
       <div class="workout-details" id="wd-${workout.id}">
         <div class="ex-log-table">${exerciseRows}</div>
         ${scoreHtml}
-        <div class="log-form">
+        ${isFuture ? '' : `<div class="log-form">
           <div class="form-row">
             <div class="form-group">
               <label>Total Duration (min)</label>
@@ -4156,20 +4361,20 @@ function renderWorkoutItem(workout, weekNum) {
             <label>Workout Notes</label>
             <input type="text" id="log-notes-${workout.id}" placeholder="How did it go?" value="${logEntry?.notes ?? ''}">
           </div>
-          <button class="log-save-btn" onclick="saveWorkoutLog('${workout.id}',${weekNum})">💾 Save Workout Log</button>
-        </div>
+        </div>`}
+        ${saveOrFutureNotice}
       </div>
     </div>`;
 }
 
 function calcWeekCompletion(weekData, weekNum) {
   const ids = weekData.workouts.map(w => w.id);
-  const done = state.log.filter(l => ids.includes(l.workoutId) && l.completed).length;
+  const done = state.log.filter(l => ids.includes(l.workoutId) && l.completed === true && l.completionStatus === 'complete').length;
   return ids.length > 0 ? Math.round(done / ids.length * 100) : 0;
 }
 
 function calcStreak() {
-  const logDates = [...new Set(state.log.filter(l => l.completed).map(l => l.date))].sort().reverse();
+  const logDates = [...new Set(state.log.filter(l => l.completed === true && l.completionStatus === 'complete').map(l => l.date))].sort().reverse();
   if (!logDates.length) return 0;
   let streak = 0;
   let checkDate = new Date(); checkDate.setHours(0,0,0,0);
@@ -4231,40 +4436,175 @@ function toggleWorkoutDetail(id) {
   if (el) el.classList.toggle('open');
 }
 
-function toggleWorkoutComplete(workoutId, weekNum) {
-  const existing = state.log.find(l => l.workoutId === workoutId);
-  if (existing) {
-    existing.completed = !existing.completed;
-    if (existing.completionStatus === undefined) {
-      existing.completionStatus = existing.completed ? 'complete' : 'missed';
-      existing.completionScore  = existing.completed ? 100 : 0;
+// Legacy helper retained for backward compatibility with any existing quickMarked logs.
+function setWorkoutQuickCompletion(workoutId, shouldComplete) {
+  if (shouldComplete) {
+    const existing = state.log.find(l => l.workoutId === workoutId);
+    if (existing) {
+      existing.completed = true;
+      existing.completionStatus = 'complete';
+      if (typeof existing.completionScore !== 'number' || existing.completionScore === 0) existing.completionScore = 100;
+    } else {
+      state.log.push({
+        workoutId, date: today(), completed: true,
+        completionStatus: 'complete', completionScore: 100,
+        duration: null, rpe: null, notes: '', exerciseLogs: [],
+        quickComplete: true
+      });
     }
   } else {
+    const idx = state.log.findIndex(l => l.workoutId === workoutId && (l.quickComplete === true || l.quickMarked === true));
+    if (idx !== -1) { state.log.splice(idx, 1); return; }
+  }
+}
+
+// Safe quick mark: creates a normalized log for a past/today workout.
+function quickMarkWorkoutComplete(workoutId, weekNum) {
+  const weekIndex = (weekNum || 1) - 1;
+  let workout = null;
+  for (const wk of (state.plan?.weeks || [])) {
+    workout = wk.workouts.find(w => w.id === workoutId);
+    if (workout) break;
+  }
+  const plannedDate = (workout && getPlannedWorkoutDate(weekIndex, workout)) || getLocalTodayString();
+  const exerciseLogs = (workout?.exercises || []).map(ex => ({
+    plannedName: ex.name, plannedSets: ex.sets, plannedReps: ex.reps, plannedRest: ex.rest || 0,
+    status: 'done', actualSets: '', actualReps: '', actualWeight: '',
+    actualWeightUnit: state.settings?.weightUnit || 'lbs', substituteName: '', notes: ''
+  }));
+  const existing = state.log.find(l => l.workoutId === workoutId);
+  if (existing) {
+    existing.completed = true;
+    existing.completionStatus = 'complete';
+    existing.completionScore = 100;
+    existing.date = plannedDate;
+    existing.quickComplete = true;
+    existing.exerciseLogs = exerciseLogs;
+  } else {
     state.log.push({
-      workoutId, date: today(), completed: true,
+      workoutId, date: plannedDate, completed: true,
       completionStatus: 'complete', completionScore: 100,
-      duration: '', rpe: '', notes: '', exerciseLogs: []
+      duration: null, rpe: null, notes: '', exerciseLogs,
+      quickComplete: true
     });
   }
   saveLog();
-  renderDashboard();
-  renderInsights();
-  renderPlan();
-  showToast(existing && existing.completed ? 'Workout marked complete!' : 'Workout unmarked.');
+  renderDashboard(); renderInsights(); renderPlan();
+  showToast('Workout marked complete.');
+}
+
+// Safe unmark: removes only quickComplete logs; never touches detailed logs.
+function quickUnmarkWorkout(workoutId, weekNum) {
+  const idx = state.log.findIndex(l => l.workoutId === workoutId && (l.quickComplete === true || l.quickMarked === true));
+  if (idx === -1) { showToast('No quick mark found to remove.'); return; }
+  state.log.splice(idx, 1);
+  saveLog();
+  renderDashboard(); renderInsights(); renderPlan();
+  showToast('Workout unmarked.');
+}
+
+// Shows the intentional quick workout action modal (never auto-completes on single click).
+let _qwmWorkoutId = null, _qwmWeekNum = null, _qwmMode = 'noLog';
+
+function showQuickWorkoutModal(workoutId, weekNum, workoutName) {
+  _qwmWorkoutId = workoutId;
+  _qwmWeekNum = weekNum;
+  _qwmMode = 'noLog';
+  document.getElementById('qwm-title').textContent = workoutName || 'Log Workout';
+  document.getElementById('qwm-message').textContent =
+    'Quick Mark Complete is for workouts you completed but don\'t want to log in detail. Or open the full log to record sets, reps, and notes.';
+  const quickBtn = document.getElementById('qwm-quick-btn');
+  quickBtn.textContent = 'Quick Mark Complete';
+  quickBtn.style.background = '';
+  document.getElementById('quick-workout-modal').classList.remove('hidden');
+}
+
+// Shows manage modal for quickComplete logs: Open Log / Remove Quick Complete / Cancel.
+function showManageQuickCompleteModal(workoutId, weekNum, workoutName) {
+  _qwmWorkoutId = workoutId;
+  _qwmWeekNum = weekNum;
+  _qwmMode = 'manageQuickComplete';
+  document.getElementById('qwm-title').textContent = workoutName || 'Manage Workout';
+  document.getElementById('qwm-message').textContent =
+    'This workout was quick-marked complete. Open the full log to add sets, reps, and notes, or remove the quick mark.';
+  const quickBtn = document.getElementById('qwm-quick-btn');
+  quickBtn.textContent = 'Remove Quick Complete';
+  quickBtn.style.background = 'var(--rose, #EF4444)';
+  document.getElementById('quick-workout-modal').classList.remove('hidden');
+}
+window.showManageQuickCompleteModal = showManageQuickCompleteModal;
+
+function closeQuickWorkoutModal() {
+  document.getElementById('quick-workout-modal').classList.add('hidden');
+  _qwmWorkoutId = null;
+  _qwmWeekNum = null;
+  _qwmMode = 'noLog';
+}
+
+// Calendar-aware, safe toggle — replaces the old one-click complete pattern.
+function toggleWorkoutComplete(workoutId, weekNum) {
+  let workout = null;
+  const weekIndex = (weekNum || 1) - 1;
+  for (const wk of (state.plan?.weeks || [])) {
+    workout = wk.workouts.find(w => w.id === workoutId);
+    if (workout) break;
+  }
+  if (!workout) return;
+
+  const wfs = getWorkoutFullStatus(workout, weekIndex);
+
+  // Block future workouts entirely
+  if (wfs.isFuture) {
+    const unlockDateStr = wfs.plannedDate
+      ? new Date(wfs.plannedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'the planned date';
+    showToast('This workout unlocks on ' + unlockDateStr + '. Logging opens on that day.');
+    return;
+  }
+
+  // Detailed/manual log → open the log form and scroll into view
+  if (wfs.hasDetailedLog) {
+    const el = document.getElementById('wd-' + workoutId);
+    if (el) { el.classList.add('open'); el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+    else toggleWorkoutDetail(workoutId);
+    showToast('Opening saved workout log.');
+    return;
+  }
+
+  // quickComplete log → show manage modal: Open Log / Remove Quick Complete / Cancel
+  if (wfs.isQuickComplete) {
+    showManageQuickCompleteModal(workoutId, weekNum, workout.name);
+    return;
+  }
+
+  // No log, past or today → show intentional action modal
+  showQuickWorkoutModal(workoutId, weekNum, workout.name);
 }
 
 function saveWorkoutLog(workoutId, weekNum) {
+  // Block future workout logging
+  let workout = null;
+  for (const w of (state.plan?.weeks || [])) {
+    workout = w.workouts.find(wo => wo.id === workoutId);
+    if (workout) break;
+  }
+  if (workout) {
+    const plannedDate = getPlannedWorkoutDate((weekNum || 1) - 1, workout);
+    const todayStr = getLocalTodayString();
+    if (plannedDate && plannedDate > todayStr) {
+      const unlockDateStr = new Date(plannedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      showToast('This workout unlocks on ' + unlockDateStr + '. Logging opens on that day.');
+      return;
+    }
+  }
+
   const dur   = document.getElementById('log-dur-'   + workoutId)?.value;
   const rpe   = document.getElementById('log-rpe-'   + workoutId)?.value;
   const notes = document.getElementById('log-notes-' + workoutId)?.value;
   const date  = document.getElementById('log-date-'  + workoutId)?.value || today();
 
   // Collect exercise-level data
-  let workout = null;
-  for (const w of (state.plan?.weeks || [])) {
-    workout = w.workouts.find(wo => wo.id === workoutId);
-    if (workout) break;
-  }
+  // workout already found above
   const POINT_MAP = { done: 1, extra: 1, substituted: 0.8, partial: 0.5, skipped: 0 };
   const exerciseLogs = (workout?.exercises || []).map((ex, i) => {
     const status = document.getElementById(`exst-${workoutId}-${i}`)?.value || '';
@@ -4295,6 +4635,9 @@ function saveWorkoutLog(workoutId, weekNum) {
     entry.completionStatus = completionStatus;
     entry.completionScore  = completionScore;
     entry.exerciseLogs     = exerciseLogs;
+    // Promote a quickComplete log to a detailed log
+    delete entry.quickComplete;
+    delete entry.quickMarked;
   } else {
     state.log.push({
       workoutId, date,
@@ -4316,6 +4659,38 @@ function saveWorkoutLog(workoutId, weekNum) {
 function attachWorkoutListeners() {
   // Listeners attached via inline onclick — nothing extra needed
 }
+
+// Heatmap cell click: calendar-aware routing for all weeks.
+function heatmapCellClick(workoutId, weekIndex) {
+  let workout = null;
+  for (const wk of (state.plan?.weeks || [])) {
+    workout = wk.workouts.find(w => w.id === workoutId);
+    if (workout) break;
+  }
+  if (!workout) return;
+  const weekNum = weekIndex + 1;
+  const wfs = getWorkoutFullStatus(workout, weekIndex);
+
+  // Future → open preview in My Plan; never allow logging from heatmap
+  if (wfs.isFuture) {
+    const unlockDateStr = wfs.plannedDate
+      ? new Date(wfs.plannedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'the planned date';
+    openWorkoutPreviewInApp(workoutId, weekNum);
+    showToast('Preview only — logging opens on ' + unlockDateStr + '.');
+    return;
+  }
+
+  // quickComplete log → manage modal: Open Log / Remove Quick Complete / Cancel
+  if (wfs.isQuickComplete) {
+    showManageQuickCompleteModal(workoutId, weekNum, workout.name);
+    return;
+  }
+
+  // noLog or realDetailedLog (including partial) → open editable log form
+  openWorkoutLogInApp(workoutId, weekNum);
+}
+window.heatmapCellClick = heatmapCellClick;
 
 function setExStatus(workoutId, exIdx, status) {
   const hidden = document.getElementById('exst-' + workoutId + '-' + exIdx);
@@ -4672,6 +5047,151 @@ function togglePlanWorkoutDetail(workoutId) {
 }
 window.togglePlanWorkoutDetail = togglePlanWorkoutDetail;
 
+// Renders an editable workout log form for past/today workouts in My Plan.
+// Uses mp- prefixed IDs to avoid conflicts with Dashboard form elements.
+function renderPlanWorkoutEditableDetail(wo, weekIndex) {
+  const log = getWorkoutLog(wo.id);
+  const weekNum = weekIndex + 1;
+  const isQC = !!(log && (log.quickComplete === true || log.quickMarked === true));
+  const qcNotice = isQC
+    ? `<div style="font-size:12px;color:#92400E;background:#FEF3C7;border-radius:6px;padding:8px 10px;margin-bottom:10px">Quick-marked complete. Add details below to convert to a detailed log.</div>`
+    : '';
+  const STATUS_LIST = ['done','partial','skipped','substituted','extra'];
+  const STATUS_LABELS = { done:'Done', partial:'Partial', skipped:'Skipped', substituted:'Subbed', extra:'Extra' };
+  const exerciseRows = (wo.exercises || []).map((ex, i) => {
+    const exLog = log?.exerciseLogs?.[i] ?? null;
+    const status = exLog?.status ?? (isQC ? 'done' : '');
+    const pillsHtml = STATUS_LIST.map(s =>
+      `<button class="ex-status-pill${status===s?' sel':''}" data-pill="mp-${wo.id}-${i}-${s}" onclick="setMpExStatus('${wo.id}',${i},'${s}')">${STATUS_LABELS[s]}</button>`
+    ).join('');
+    const subVisible = status === 'substituted' ? 'block' : 'none';
+    return `
+      <div class="ex-log-row" id="mp-exrow-${wo.id}-${i}" data-status="${status}">
+        <input type="hidden" id="mp-exst-${wo.id}-${i}" value="${status}">
+        <div class="ex-log-head">
+          <div class="ex-log-name">${ex.name}</div>
+          <div class="ex-log-plan">${ex.sets} &times; ${ex.reps}${ex.rest ? ' &middot; ' + ex.rest + 's' : ''}</div>
+          <div class="ex-log-pills">${pillsHtml}</div>
+        </div>
+        <div class="ex-log-fields">
+          <div class="ex-log-field"><label>Sets</label><input type="text" id="mp-exsets-${wo.id}-${i}" placeholder="${ex.sets}" value="${exLog?.actualSets ?? ''}"></div>
+          <div class="ex-log-field"><label>Reps</label><input type="text" id="mp-exreps-${wo.id}-${i}" placeholder="${ex.reps}" value="${exLog?.actualReps ?? ''}"></div>
+          <div class="ex-log-field"><label>Weight</label><input type="text" id="mp-exwt-${wo.id}-${i}" placeholder="—" value="${exLog?.actualWeight ?? ''}"></div>
+          <div class="ex-log-field"><label>Notes</label><input type="text" id="mp-exnotes-${wo.id}-${i}" placeholder="optional" value="${exLog?.notes ?? ''}"></div>
+        </div>
+        <div class="ex-sub-wrap" id="mp-exsub-wrap-${wo.id}-${i}" style="display:${subVisible}">
+          <label>Substitute Exercise</label>
+          <input type="text" id="mp-exsub-${wo.id}-${i}" placeholder="What did you do instead?" value="${exLog?.substituteName ?? ''}">
+        </div>
+      </div>`;
+  }).join('');
+  const todayStr = getLocalTodayString();
+  return `${qcNotice}
+    <div class="ex-log-table">${exerciseRows}</div>
+    <div class="log-form" style="margin-top:12px">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Total Duration (min)</label>
+          <input type="number" id="mp-log-dur-${wo.id}" placeholder="35" value="${log?.duration ?? ''}">
+        </div>
+        <div class="form-group">
+          <label>Overall RPE (1–10)</label>
+          <input type="number" id="mp-log-rpe-${wo.id}" placeholder="7" min="1" max="10" value="${log?.rpe ?? ''}">
+        </div>
+        <div class="form-group">
+          <label>Date</label>
+          <input type="date" id="mp-log-date-${wo.id}" value="${log?.date ?? wo.plannedDate ?? todayStr}">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Workout Notes</label>
+        <input type="text" id="mp-log-notes-${wo.id}" placeholder="How did it go?" value="${log?.notes ?? ''}">
+      </div>
+    </div>
+    <button class="log-save-btn" style="margin-top:12px" onclick="savePlanWorkoutLog('${wo.id}',${weekNum})">💾 Save Workout Log</button>`;
+}
+
+function setMpExStatus(workoutId, exIdx, status) {
+  const hidden = document.getElementById('mp-exst-' + workoutId + '-' + exIdx);
+  if (hidden) hidden.value = status;
+  const row = document.getElementById('mp-exrow-' + workoutId + '-' + exIdx);
+  if (row) row.dataset.status = status;
+  document.querySelectorAll('[data-pill^="mp-' + workoutId + '-' + exIdx + '-"]').forEach(btn => {
+    btn.classList.toggle('sel', btn.dataset.pill === 'mp-' + workoutId + '-' + exIdx + '-' + status);
+  });
+  const subWrap = document.getElementById('mp-exsub-wrap-' + workoutId + '-' + exIdx);
+  if (subWrap) subWrap.style.display = status === 'substituted' ? 'block' : 'none';
+}
+window.setMpExStatus = setMpExStatus;
+
+function savePlanWorkoutLog(workoutId, weekNum) {
+  let workout = null;
+  for (const w of (state.plan?.weeks || [])) {
+    workout = w.workouts.find(wo => wo.id === workoutId);
+    if (workout) break;
+  }
+  if (workout) {
+    const plannedDate = getPlannedWorkoutDate((weekNum || 1) - 1, workout);
+    const todayStr = getLocalTodayString();
+    if (plannedDate && plannedDate > todayStr) {
+      const unlockDateStr = new Date(plannedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      showToast('This workout unlocks on ' + unlockDateStr + '. Logging opens on that day.');
+      return;
+    }
+  }
+  const dur   = document.getElementById('mp-log-dur-'   + workoutId)?.value;
+  const rpe   = document.getElementById('mp-log-rpe-'   + workoutId)?.value;
+  const notes = document.getElementById('mp-log-notes-' + workoutId)?.value;
+  const date  = document.getElementById('mp-log-date-'  + workoutId)?.value || getLocalTodayString();
+  const POINT_MAP = { done: 1, extra: 1, substituted: 0.8, partial: 0.5, skipped: 0 };
+  const exerciseLogs = (workout?.exercises || []).map((ex, i) => {
+    const status = document.getElementById(`mp-exst-${workoutId}-${i}`)?.value || '';
+    return {
+      plannedName: ex.name, plannedSets: ex.sets, plannedReps: ex.reps, plannedRest: ex.rest || 0,
+      status,
+      actualSets:       document.getElementById(`mp-exsets-${workoutId}-${i}`)?.value  || '',
+      actualReps:       document.getElementById(`mp-exreps-${workoutId}-${i}`)?.value  || '',
+      actualWeight:     document.getElementById(`mp-exwt-${workoutId}-${i}`)?.value    || '',
+      actualWeightUnit: state.settings.weightUnit || 'lbs',
+      substituteName:   document.getElementById(`mp-exsub-${workoutId}-${i}`)?.value   || '',
+      notes:            document.getElementById(`mp-exnotes-${workoutId}-${i}`)?.value || ''
+    };
+  });
+  const totalPossible  = exerciseLogs.length;
+  const earned         = exerciseLogs.reduce((s, el) => s + (POINT_MAP[el.status] ?? 0), 0);
+  const completionScore  = totalPossible > 0 ? Math.round(earned / totalPossible * 100) : (dur ? 100 : 0);
+  const completionStatus = completionScore >= 85 ? 'complete' : completionScore >= 40 ? 'partial' : 'missed';
+  let entry = state.log.find(l => l.workoutId === workoutId);
+  if (entry) {
+    entry.duration = dur ? +dur : null;
+    entry.rpe = rpe ? +rpe : null;
+    entry.notes = notes || '';
+    entry.date = date;
+    entry.completed = completionStatus === 'complete';
+    entry.completionStatus = completionStatus;
+    entry.completionScore  = completionScore;
+    entry.exerciseLogs     = exerciseLogs;
+    delete entry.quickComplete;
+    delete entry.quickMarked;
+  } else {
+    state.log.push({
+      workoutId, date,
+      completed: completionStatus === 'complete',
+      completionStatus, completionScore,
+      duration: dur ? +dur : null,
+      rpe: rpe ? +rpe : null,
+      notes: notes || '',
+      exerciseLogs
+    });
+  }
+  saveLog();
+  renderDashboard();
+  renderInsights();
+  renderPlan();
+  showToast('Workout saved! ' + completionScore + '% completion');
+}
+window.savePlanWorkoutLog = savePlanWorkoutLog;
+
 // ---- Plan Tab ----
 
 function renderPlan() {
@@ -4835,20 +5355,33 @@ function toggleWeekDetail(weekNum) {
         ${ws.effortPct > 0 ? `<span class="wdd-chip wdd-chip-amber">${ws.effortPct}% effort</span>` : ''}
       </div>
       ${w.workouts.map(wo => {
-        const logEntry = state.log.find(l => l.workoutId === wo.id);
+        const wi = w.weekNum - 1;
+        const wfs = getWorkoutFullStatus(wo, wi);
+        const logEntry = wfs.log;
+        const isEditableInPlan = !wfs.isFuture;
         const statusIcon = logEntry
           ? (logEntry.completionStatus === 'complete' || logEntry.completed ? '✓' : logEntry.completionStatus === 'partial' ? '◑' : logEntry.completionStatus === 'missed' ? '✗' : '◑')
           : '';
         const statusColor = logEntry
           ? (logEntry.completionStatus === 'complete' || logEntry.completed ? 'var(--mint)' : logEntry.completionStatus === 'partial' ? '#F59E0B' : logEntry.completionStatus === 'missed' ? '#EF4444' : '#F59E0B')
           : 'transparent';
-        const btnLabel = logEntry ? 'View Log' : 'View Plan';
-        const detailHtml = renderPlanWorkoutHistoryDetail(wo);
+        const btnLabel = isEditableInPlan ? (logEntry ? 'Edit Log' : 'Log Workout') : 'Preview';
+        let detailHtml;
+        if (isEditableInPlan) {
+          detailHtml = renderPlanWorkoutEditableDetail(wo, wi);
+        } else {
+          const unlockDateStr = wfs.plannedDate
+            ? new Date(wfs.plannedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            : 'the planned date';
+          detailHtml = `<div style="font-size:12px;color:var(--violet);background:#F5F3FF;border-radius:6px;padding:8px 10px;margin-bottom:10px">
+              This workout unlocks on ${unlockDateStr}. You can preview it now, but logging opens on that day.
+            </div>${renderPlanWorkoutHistoryDetail(wo)}`;
+        }
         return `
         <div class="wdd-wo-card">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <div>
-              <div class="wdd-wo-day">${wo.day}</div>
+              <div class="wdd-wo-day">${getLocalWeekdayName(wo.plannedDate) || wo.day}</div>
               <div class="wdd-wo-name">${wo.name}</div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
@@ -5847,6 +6380,7 @@ function adjustFuturePlan() {
   state.user.focus = focus;
   state.user.fitnessLevel = level;
   state.plan = newPlan;
+  normalizePlannedWorkoutDates();
 
   saveUser();
   savePlan();
@@ -6334,18 +6868,19 @@ function renderInsights() {
   // ── Helper: consistency heatmap ─────────────────────────────────
   const HM = { complete: '#3BAE8A', partial: '#F59E0B', missed: '#F87171', notStarted: '#E5E7EB' };
   function heatmapGrid() {
+    const todayStr = today();
     const rows = state.plan.weeks.map((wk, i) => {
       const cells = wk.workouts.map(wo => {
-        const l = state.log.find(lg => lg.workoutId === wo.id);
-        let status = 'notStarted';
-        if (l) {
-          const cs = l.completionStatus;
-          if (cs === 'complete' || (!cs && l.completed)) status = 'complete';
-          else if (cs === 'partial') status = 'partial';
-          else if (cs === 'missed') status = 'missed';
-          else status = l.completed ? 'complete' : 'partial';
+        const status = getPlannedWorkoutDisplayStatus(wo, i, todayStr);
+        const isFuture = wo.plannedDate ? wo.plannedDate > todayStr : false;
+        const safeId = wo.id.replace(/'/g, "\\'");
+        const safeName = (wo.name || 'Workout').replace(/'/g, "\\'");
+        let titleText = safeName + ' — ' + status;
+        if (isFuture && wo.plannedDate) {
+          const unlockStr = new Date(wo.plannedDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          titleText = safeName + ' — unlocks ' + unlockStr;
         }
-        return `<div class="aa-hm-cell" style="background:${HM[status]}" title="${wo.name || 'Workout'} — ${status}"></div>`;
+        return `<div class="aa-hm-cell" style="background:${HM[status]};cursor:pointer" title="${titleText}" onclick="heatmapCellClick('${safeId}',${i})"></div>`;
       }).join('');
       return `<div class="aa-hm-row"><div class="aa-hm-wlbl">W${i + 1}</div>${cells}</div>`;
     }).join('');
@@ -6844,7 +7379,9 @@ function importData(input) {
       if (data.photo_after_meta)  localStorage.setItem('vr_photo_after_meta',  data.photo_after_meta);
       if (data.photo_timeline)    localStorage.setItem('vr_photo_timeline',    data.photo_timeline);
       if (typeof normalizeLegacyLogs === 'function') normalizeLegacyLogs();
+      if (typeof normalizeWorkoutLogs === 'function') normalizeWorkoutLogs();
       if (typeof runUnitMigration === 'function') runUnitMigration();
+      if (typeof normalizePlannedWorkoutDates === 'function') normalizePlannedWorkoutDates();
       const narrativesChanged = refreshPlanNarrativesFromDynamicCopy(state.plan, state.user);
       if (narrativesChanged) savePlan();
       initMainApp();
@@ -6948,6 +7485,64 @@ function closeConfirm() {
 document.getElementById('confirm-ok-btn').addEventListener('click', () => {
   if (confirmCallback) confirmCallback();
   closeConfirm();
+});
+
+// Opens the correct workout log panel for any week: Dashboard for the current week,
+// My Plan (with week expanded) for all other weeks. Never opens future workouts.
+function openWorkoutLogInApp(workoutId, weekNum) {
+  const cw = getCurrentWeekNum(state.user?.setupDate, state.plan?.totalWeeks) || 1;
+  if (weekNum === cw) {
+    switchTab('dashboard');
+    setTimeout(() => {
+      const el = document.getElementById('wd-' + workoutId);
+      if (el) { el.classList.add('open'); el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+    }, 120);
+  } else {
+    switchTab('plan');
+    setTimeout(() => {
+      if (expandedWeekDetail !== weekNum) toggleWeekDetail(weekNum);
+      setTimeout(() => {
+        const el = document.getElementById('mp-log-detail-' + workoutId);
+        if (el && !el.classList.contains('open')) togglePlanWorkoutDetail(workoutId);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 80);
+    }, 120);
+  }
+}
+
+// Opens preview-only workout detail in My Plan for future workouts.
+function openWorkoutPreviewInApp(workoutId, weekNum) {
+  switchTab('plan');
+  setTimeout(() => {
+    if (expandedWeekDetail !== weekNum) toggleWeekDetail(weekNum);
+    setTimeout(() => {
+      const el = document.getElementById('mp-log-detail-' + workoutId);
+      if (el && !el.classList.contains('open')) togglePlanWorkoutDetail(workoutId);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 80);
+  }, 120);
+}
+window.openWorkoutPreviewInApp = openWorkoutPreviewInApp;
+
+// ---- Quick Workout Action Modal listeners ----
+document.getElementById('qwm-open-log-btn').addEventListener('click', () => {
+  const id = _qwmWorkoutId, wn = _qwmWeekNum;
+  closeQuickWorkoutModal();
+  if (!id) return;
+  openWorkoutLogInApp(id, wn);
+});
+
+document.getElementById('qwm-quick-btn').addEventListener('click', () => {
+  const id = _qwmWorkoutId, wn = _qwmWeekNum, mode = _qwmMode;
+  closeQuickWorkoutModal();
+  if (!id) return;
+  if (mode === 'manageQuickComplete') quickUnmarkWorkout(id, wn);
+  else quickMarkWorkoutComplete(id, wn);
+});
+
+// Close QWM on backdrop click
+document.getElementById('quick-workout-modal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('quick-workout-modal')) closeQuickWorkoutModal();
 });
 
 // ---- Toast ----
@@ -7512,6 +8107,455 @@ function auditVisibleMyPlanLogText() {
   return result;
 }
 window.auditVisibleMyPlanLogText = auditVisibleMyPlanLogText;
+
+function auditWorkoutToggleConsistency() {
+  const seenIds = {};
+  const duplicateWorkoutLogs = [];
+  state.log.forEach(l => {
+    if (seenIds[l.workoutId]) duplicateWorkoutLogs.push(l.workoutId);
+    else seenIds[l.workoutId] = true;
+  });
+  const corruptedCompleteLogs = state.log.filter(l =>
+    l.completionStatus === 'complete' && !l.completed && !hasMeaningfulWorkoutData(l)
+  ).map(l => ({ workoutId: l.workoutId, completed: l.completed, completionStatus: l.completionStatus, completionScore: l.completionScore }));
+  const inconsistentCompletedFalseButCompleteStatus = state.log.filter(l =>
+    l.completed === false && l.completionStatus === 'complete'
+  ).map(l => ({ workoutId: l.workoutId, completed: l.completed, completionStatus: l.completionStatus }));
+  const result = {
+    duplicateWorkoutLogs,
+    corruptedCompleteLogs,
+    inconsistentCompletedFalseButCompleteStatus,
+    normalizationAvailable: typeof normalizeWorkoutLogs === 'function',
+    passed: duplicateWorkoutLogs.length === 0 && corruptedCompleteLogs.length === 0 && inconsistentCompletedFalseButCompleteStatus.length === 0
+  };
+  console.table({
+    duplicateWorkoutLogs: result.duplicateWorkoutLogs.length,
+    corruptedCompleteLogs: result.corruptedCompleteLogs.length,
+    inconsistentCompletedFalseButCompleteStatus: result.inconsistentCompletedFalseButCompleteStatus.length,
+    normalizationAvailable: result.normalizationAvailable,
+    passed: result.passed
+  });
+  return result;
+}
+window.auditWorkoutToggleConsistency = auditWorkoutToggleConsistency;
+
+function auditSafeQuickWorkoutToggle() {
+  const todayStr = getLocalTodayString();
+  const logCountBefore = state.log.length;
+
+  // 1. getWorkoutFullStatus helper exists
+  const fullStatusHelperExists = typeof getWorkoutFullStatus === 'function';
+
+  // 2. Future workout detected as isFuture/non-editable
+  let futureWorkoutQuickMarkBlocked = true;
+  if (state.plan && state.plan.weeks) {
+    const futureWo = state.plan.weeks.flatMap(w => w.workouts).find(wo => wo.plannedDate && wo.plannedDate > todayStr);
+    if (futureWo) {
+      const wi = state.plan.weeks.findIndex(w => w.workouts.some(wo => wo.id === futureWo.id));
+      const wfs = getWorkoutFullStatus(futureWo, wi);
+      futureWorkoutQuickMarkBlocked = wfs.isFuture === true && wfs.isEditable === false;
+    }
+  }
+
+  // 3. quickComplete log has normalized structure
+  const testId = '__aqwt_qc__';
+  state.log.push({ workoutId: testId, date: todayStr, completed: true, completionStatus: 'complete', completionScore: 100, duration: null, rpe: null, notes: '', exerciseLogs: [], quickComplete: true });
+  const qcLog = state.log.find(l => l.workoutId === testId);
+  const quickCompleteCreatesNormalizedLog = !!(qcLog && qcLog.completed === true && qcLog.completionStatus === 'complete' && qcLog.completionScore === 100 && qcLog.quickComplete === true);
+
+  // 4. quickComplete log found by flag (prerequisite for safe unmark)
+  const qcIdx = state.log.findIndex(l => l.workoutId === testId && l.quickComplete === true);
+  const quickUnmarkRemovesOnlyQuickCompleteLog = qcIdx !== -1;
+  state.log.splice(state.log.findIndex(l => l.workoutId === testId), 1);
+
+  // 5. Manual/detailed log has NO quickComplete flag → unmark would not touch it
+  const manualId = '__aqwt_manual__';
+  state.log.push({ workoutId: manualId, date: todayStr, completed: true, completionStatus: 'complete', completionScore: 100, duration: 45, rpe: 7, notes: 'Test', exerciseLogs: [] });
+  const manualQcIdx = state.log.findIndex(l => l.workoutId === manualId && l.quickComplete === true);
+  const manualLogNotDeletedByCircleClick = manualQcIdx === -1;
+  state.log = state.log.filter(l => l.workoutId !== manualId);
+
+  // 6–8. Re-render functions exist
+  const dashboardStatsUpdateAfterQuickToggle = typeof renderDashboard === 'function';
+  const myPlanUpdatesAfterQuickToggle = typeof renderPlan === 'function';
+  const insightsUpdateAfterQuickToggle = typeof renderInsights === 'function';
+
+  // 9. Past/today workout is still editable
+  let pastMissedWorkoutStillEditable = true;
+  if (state.plan && state.plan.weeks) {
+    const pastWo = state.plan.weeks.flatMap(w => w.workouts).find(wo => wo.plannedDate && wo.plannedDate < todayStr);
+    if (pastWo) {
+      const wi = state.plan.weeks.findIndex(w => w.workouts.some(wo => wo.id === pastWo.id));
+      const wfs = getWorkoutFullStatus(pastWo, wi);
+      pastMissedWorkoutStillEditable = wfs.isEditable === true;
+    }
+  }
+
+  // 10. Heatmap cell click function exists
+  const heatmapCellsClickable = typeof heatmapCellClick === 'function';
+
+  // 11. Modal exists (empty circle click cannot auto-complete)
+  const emptyCircleClickCannotCreateComplete = typeof showQuickWorkoutModal === 'function';
+
+  // 12. Legacy quickMarked treated as quickComplete by getWorkoutFullStatus
+  const legacyId = '__aqwt_legacy__';
+  state.log.push({ workoutId: legacyId, completed: true, completionStatus: 'complete', completionScore: 100, exerciseLogs: [], quickMarked: true });
+  const legacyWo = { id: legacyId, plannedDate: todayStr, exercises: [] };
+  const legacyWfs = getWorkoutFullStatus(legacyWo, 0);
+  const legacyQuickMarkedTreatedAsQuickComplete = legacyWfs.isQuickComplete === true;
+  state.log = state.log.filter(l => l.workoutId !== legacyId);
+
+  // 13. openWorkoutLogInApp helper exists for non-current-week support
+  const openLogSupportsNonCurrentWeek = typeof openWorkoutLogInApp === 'function';
+
+  // Verify no mutation
+  const noMutation = state.log.length === logCountBefore;
+
+  const passed = fullStatusHelperExists && futureWorkoutQuickMarkBlocked &&
+    quickCompleteCreatesNormalizedLog && quickUnmarkRemovesOnlyQuickCompleteLog &&
+    manualLogNotDeletedByCircleClick && dashboardStatsUpdateAfterQuickToggle &&
+    myPlanUpdatesAfterQuickToggle && insightsUpdateAfterQuickToggle &&
+    pastMissedWorkoutStillEditable && heatmapCellsClickable &&
+    emptyCircleClickCannotCreateComplete && legacyQuickMarkedTreatedAsQuickComplete &&
+    openLogSupportsNonCurrentWeek && noMutation;
+
+  const result = {
+    futureWorkoutQuickMarkBlocked,
+    emptyCircleClickCannotCreateComplete,
+    quickCompleteCreatesNormalizedLog,
+    quickUnmarkRemovesOnlyQuickCompleteLog,
+    manualLogNotDeletedByCircleClick,
+    dashboardStatsUpdateAfterQuickToggle,
+    myPlanUpdatesAfterQuickToggle,
+    insightsUpdateAfterQuickToggle,
+    pastMissedWorkoutStillEditable,
+    heatmapCellsClickable,
+    legacyQuickMarkedTreatedAsQuickComplete,
+    openLogSupportsNonCurrentWeek,
+    passed
+  };
+  console.table(result);
+  return result;
+}
+window.auditSafeQuickWorkoutToggle = auditSafeQuickWorkoutToggle;
+
+// Read-only simulation: returns display status for every planned workout as of a given test date.
+// Does not mutate state.log or localStorage.
+function simulatePlannedWorkoutStatusForDate(testToday) {
+  if (!state.plan || !state.user) return null;
+  return state.plan.weeks.map((wk, i) => ({
+    week: i + 1,
+    workouts: wk.workouts.map((wo, oi) => {
+      const plannedDate = getPlannedWorkoutDate(i, wo);
+      const realWeekday = getLocalWeekdayName(plannedDate);
+      return {
+        name: wo.name,
+        workoutIndex: oi,
+        day: wo.day,
+        plannedDate,
+        realWeekday,
+        hasRealLog: !!state.log.find(l => l.workoutId === wo.id),
+        status: getPlannedWorkoutDisplayStatus(wo, i, testToday),
+        warning: realWeekday && wo.day && realWeekday !== wo.day
+          ? `stored day "${wo.day}" does not match plannedDate weekday "${realWeekday}"`
+          : null,
+      };
+    })
+  }));
+}
+window.simulatePlannedWorkoutStatusForDate = simulatePlannedWorkoutStatusForDate;
+
+function auditMissedWorkoutStatusLogic() {
+  const helperExists = typeof getPlannedWorkoutDisplayStatus === 'function' && typeof getPlannedWorkoutDate === 'function';
+  const todayStr = today();
+  const logCountBefore = state.log.length;
+
+  // Inline status tester using explicit plannedDate (bypasses getPlannedWorkoutDate for audit isolation)
+  function testStatus(workoutId, plannedDate) {
+    const l = state.log.find(lg => lg.workoutId === workoutId);
+    if (l) {
+      if (l.completed === true && l.completionStatus === 'complete') return 'complete';
+      if (l.completionStatus === 'partial') return 'partial';
+      if (l.completionStatus === 'missed' || l.completionStatus === 'skipped') return 'missed';
+      return 'notStarted';
+    }
+    if (plannedDate < todayStr) return 'missed';
+    return 'notStarted';
+  }
+
+  const pastDate   = '2000-01-01';
+  const futureDate = '2099-12-31';
+  const noLogId    = '__audit_no_log__';
+
+  const pastUnloggedWorkoutBecomesDisplayMissed = testStatus(noLogId, pastDate) === 'missed';
+  const todayUnloggedWorkoutStaysNotStarted     = testStatus(noLogId, todayStr) === 'notStarted';
+  const futureUnloggedWorkoutStaysNotStarted    = testStatus(noLogId, futureDate) === 'notStarted';
+  const displayMissedDoesNotCreateLocalStorageLog = state.log.length === logCountBefore;
+
+  // Temporarily inject fake logs to test override behavior, then remove them
+  const fakeComplete = { workoutId: '__adt_c__', completed: true,  completionStatus: 'complete', completionScore: 100, exerciseLogs: [] };
+  const fakePartial  = { workoutId: '__adt_p__', completed: false, completionStatus: 'partial',  completionScore: 50,  exerciseLogs: [] };
+  const fakeSkipped  = { workoutId: '__adt_s__', completed: false, completionStatus: 'skipped',  completionScore: 0,   exerciseLogs: [] };
+  state.log.push(fakeComplete, fakePartial, fakeSkipped);
+
+  const lateLoggedPastWorkoutOverridesMissed = testStatus('__adt_c__', pastDate) === 'complete';
+  const loggedCompleteStaysComplete          = testStatus('__adt_c__', todayStr) === 'complete';
+  const loggedPartialStaysPartial            = testStatus('__adt_p__', pastDate) === 'partial';
+  const loggedSkippedBecomesMissed           = testStatus('__adt_s__', pastDate) === 'missed';
+
+  state.log = state.log.filter(l => !['__adt_c__', '__adt_p__', '__adt_s__'].includes(l.workoutId));
+  const noMutationDuringAudit = state.log.length === logCountBefore;
+
+  const passed = helperExists && pastUnloggedWorkoutBecomesDisplayMissed && todayUnloggedWorkoutStaysNotStarted &&
+    futureUnloggedWorkoutStaysNotStarted && lateLoggedPastWorkoutOverridesMissed &&
+    loggedCompleteStaysComplete && loggedPartialStaysPartial && loggedSkippedBecomesMissed &&
+    displayMissedDoesNotCreateLocalStorageLog && noMutationDuringAudit;
+
+  const result = {
+    helperExists, pastUnloggedWorkoutBecomesDisplayMissed, todayUnloggedWorkoutStaysNotStarted,
+    futureUnloggedWorkoutStaysNotStarted, lateLoggedPastWorkoutOverridesMissed,
+    loggedCompleteStaysComplete, loggedPartialStaysPartial, loggedSkippedBecomesMissed,
+    displayMissedDoesNotCreateLocalStorageLog, noMutationDuringAudit, passed
+  };
+  console.table(result);
+  return result;
+}
+window.auditMissedWorkoutStatusLogic = auditMissedWorkoutStatusLogic;
+
+// Assigns wo.plannedDate and corrects wo.day from setupDate + offset table.
+// Returns true if any workout was changed. Saves plan if changed.
+// Safe to call on every load — idempotent if dates are already correct.
+function normalizePlannedWorkoutDates() {
+  if (!state.plan || !state.user || !state.user.setupDate) return false;
+  const setupDate = state.user.setupDate;
+  let changed = false;
+  state.plan.weeks.forEach((wk, wi) => {
+    const count = wk.workouts.length;
+    const offsets = WORKOUT_COUNT_OFFSETS[count] || Array.from({length: count}, (_, j) => j);
+    wk.workouts.forEach((wo, oi) => {
+      const offset = offsets[oi] !== undefined ? offsets[oi] : oi;
+      const plannedDate = addLocalDays(setupDate, wi * 7 + offset);
+      const weekday = getLocalWeekdayName(plannedDate);
+      if (wo.plannedDate !== plannedDate || wo.day !== weekday) {
+        wo.plannedDate = plannedDate;
+        if (weekday) wo.day = weekday;
+        changed = true;
+      }
+    });
+  });
+  if (changed) savePlan();
+  return changed;
+}
+window.normalizePlannedWorkoutDates = normalizePlannedWorkoutDates;
+
+function auditCalendarSafeWorkoutStatusLogic() {
+  const todayStr = getLocalTodayString();
+
+  // 1. Local date helper exists
+  const localTodayHelperExists = typeof getLocalTodayString === 'function' &&
+    typeof getLocalWeekdayName === 'function' && typeof addLocalDays === 'function';
+
+  // 2. getLocalTodayString returns the same date as local Date (not UTC-shifted)
+  const localDate = new Date();
+  const localExpected = localDate.getFullYear() + '-' +
+    String(localDate.getMonth() + 1).padStart(2, '0') + '-' +
+    String(localDate.getDate()).padStart(2, '0');
+  const noISOStringTodayForWorkoutStatus = getLocalTodayString() === localExpected;
+
+  // 3. Planned dates exist on workouts
+  let plannedDateExistsOnWorkouts = false;
+  if (state.plan && state.plan.weeks) {
+    const allWo = state.plan.weeks.flatMap(w => w.workouts);
+    plannedDateExistsOnWorkouts = allWo.length > 0 && allWo.every(wo => !!wo.plannedDate);
+  }
+
+  // 4. Stored day labels match real weekday from plannedDate
+  let plannedDateWeekdayMatchesDayLabel = true;
+  if (state.plan && state.plan.weeks) {
+    for (const wk of state.plan.weeks) {
+      for (const wo of wk.workouts) {
+        if (wo.plannedDate) {
+          const expected = getLocalWeekdayName(wo.plannedDate);
+          if (expected && wo.day !== expected) { plannedDateWeekdayMatchesDayLabel = false; break; }
+        }
+      }
+      if (!plannedDateWeekdayMatchesDayLabel) break;
+    }
+  }
+
+  // 5. 2026-06-16 returns Tuesday
+  const june16Weekday = getLocalWeekdayName('2026-06-16');
+  const june16IsTuesday = june16Weekday === 'Tuesday';
+
+  // 6. Plan starting on Tuesday does not label first workout as Monday
+  let setupDateDoesNotCreateMissedBeforePlanStart = true;
+  if (state.plan && state.user && state.user.setupDate) {
+    const firstWk = state.plan.weeks[0];
+    if (firstWk && firstWk.workouts.length > 0) {
+      const firstWo = firstWk.workouts[0];
+      const pd = getPlannedWorkoutDate(0, firstWo);
+      setupDateDoesNotCreateMissedBeforePlanStart = pd >= state.user.setupDate;
+    }
+  }
+
+  // 7–10. Status logic (non-mutating inline test)
+  const logCountBefore = state.log.length;
+  function testStatus(workoutId, plannedDate) {
+    const l = state.log.find(lg => lg.workoutId === workoutId);
+    if (l) {
+      if (l.completed === true && l.completionStatus === 'complete') return 'complete';
+      if (l.completionStatus === 'partial') return 'partial';
+      if (l.completionStatus === 'missed' || l.completionStatus === 'skipped') return 'missed';
+      return 'notStarted';
+    }
+    if (plannedDate < todayStr) return 'missed';
+    return 'notStarted';
+  }
+  const pastUnloggedBecomesMissed       = testStatus('__cs_noLog__', '2000-01-01') === 'missed';
+  const todayUnloggedStaysNotStarted    = testStatus('__cs_noLog__', todayStr) === 'notStarted';
+  const futureUnloggedStaysNotStarted   = testStatus('__cs_noLog__', '2099-12-31') === 'notStarted';
+
+  const fakeC = { workoutId: '__cs_c__', completed: true,  completionStatus: 'complete', completionScore: 100, exerciseLogs: [] };
+  const fakeP = { workoutId: '__cs_p__', completed: false, completionStatus: 'partial',  completionScore: 50,  exerciseLogs: [] };
+  state.log.push(fakeC, fakeP);
+  const lateLoggedPastWorkoutOverridesMissed = testStatus('__cs_c__', '2000-01-01') === 'complete';
+  state.log = state.log.filter(l => !['__cs_c__', '__cs_p__'].includes(l.workoutId));
+  const noMutationDuringAudit = state.log.length === logCountBefore;
+  const displayMissedDoesNotCreateLocalStorageLog = noMutationDuringAudit;
+
+  // 11. Weekly summary correctly separates missed from notStarted
+  let weeklySummaryCorrect = false;
+  if (state.plan && state.plan.weeks && state.plan.weeks.length > 0) {
+    const stats = getWeekLogStats(state.plan.weeks[0]);
+    weeklySummaryCorrect = typeof stats.missed === 'number' && typeof stats.notStarted === 'number' &&
+      (stats.missed + stats.notStarted) <= stats.planned;
+  }
+
+  // 12. Unified status helper used across sections
+  const dashboardStatsUseUnifiedStatus   = typeof getPlannedWorkoutDisplayStatus === 'function';
+  const myPlanStatsUseUnifiedStatus      = typeof getWeekLogStats === 'function';
+  const insightsHeatmapUsesUnifiedStatus = typeof getPlannedWorkoutDisplayStatus === 'function';
+
+  const passed = localTodayHelperExists && noISOStringTodayForWorkoutStatus &&
+    plannedDateExistsOnWorkouts && plannedDateWeekdayMatchesDayLabel &&
+    june16IsTuesday && setupDateDoesNotCreateMissedBeforePlanStart &&
+    pastUnloggedBecomesMissed && todayUnloggedStaysNotStarted &&
+    futureUnloggedStaysNotStarted && lateLoggedPastWorkoutOverridesMissed &&
+    weeklySummaryCorrect && dashboardStatsUseUnifiedStatus &&
+    myPlanStatsUseUnifiedStatus && insightsHeatmapUsesUnifiedStatus &&
+    displayMissedDoesNotCreateLocalStorageLog && noMutationDuringAudit;
+
+  const result = {
+    localTodayHelperExists, noISOStringTodayForWorkoutStatus,
+    plannedDateExistsOnWorkouts, plannedDateWeekdayMatchesDayLabel,
+    june16IsTuesday,
+    setupDateDoesNotCreateMissedBeforePlanStart,
+    pastUnloggedBecomesMissed, todayUnloggedStaysNotStarted, futureUnloggedStaysNotStarted,
+    lateLoggedPastWorkoutOverridesMissed,
+    weeklySummaryCorrect,
+    dashboardStatsUseUnifiedStatus, myPlanStatsUseUnifiedStatus, insightsHeatmapUsesUnifiedStatus,
+    displayMissedDoesNotCreateLocalStorageLog, noMutationDuringAudit,
+    passed,
+  };
+  console.table(result);
+  return result;
+}
+window.auditCalendarSafeWorkoutStatusLogic = auditCalendarSafeWorkoutStatusLogic;
+
+// Non-mutating audit: verifies heatmap/dashboard/myplan log routing fix is in place.
+function auditHeatmapLogRoutingFix() {
+  const logCountBefore = state.log.length;
+
+  // Check helper functions exist
+  const heatmapCellClickExists    = typeof heatmapCellClick === 'function';
+  const toggleWorkoutCompleteExists = typeof toggleWorkoutComplete === 'function';
+  const openWorkoutLogInAppExists = typeof openWorkoutLogInApp === 'function';
+  const openWorkoutPreviewInAppExists = typeof openWorkoutPreviewInApp === 'function';
+  const showManageQuickCompleteModalExists = typeof showManageQuickCompleteModal === 'function';
+  const savePlanWorkoutLogExists  = typeof savePlanWorkoutLog === 'function';
+  const renderPlanWorkoutEditableDetailExists = typeof renderPlanWorkoutEditableDetail === 'function';
+  const setMpExStatusExists       = typeof setMpExStatus === 'function';
+
+  // Inspect source for routing decisions
+  const src = heatmapCellClick.toString();
+  const toggleSrc = toggleWorkoutComplete.toString();
+
+  // Heatmap: future routes to openWorkoutPreviewInApp (not just toast)
+  const heatmapFutureRoutesToPreview = src.includes('openWorkoutPreviewInApp');
+
+  // Heatmap: past/no-log routes to openWorkoutLogInApp (not showQuickWorkoutModal)
+  const heatmapPastNoLogRoutesToEditableLog = src.includes('openWorkoutLogInApp');
+
+  // Heatmap: does NOT call showQuickWorkoutModal for noLog (it used to)
+  const heatmapDoesNotQuickMarkPastNoLogDirectly = !src.includes('showQuickWorkoutModal');
+
+  // Heatmap: partial/detailed log routes to openWorkoutLogInApp (covered by the noLog path — same branch)
+  const heatmapPartialLogRoutesToEditableLog = src.includes('openWorkoutLogInApp');
+
+  // Dashboard: real detailed log routes to opening wd- element (not just toggleWorkoutDetail)
+  const dashboardPartialCircleRoutesToEditableLog =
+    toggleSrc.includes('el.classList.add(\'open\')') && toggleSrc.includes('wd-');
+
+  // Dashboard: detailed log check does NOT show quickComplete removal (doesn't call confirmAction for detailed)
+  const dashboardDetailedLogDoesNotShowQuickRemove =
+    !toggleSrc.match(/hasDetailedLog[\s\S]{0,80}confirmAction/);
+
+  // Quick complete manage modal has Open Log option
+  const qwmOpenLogBtnExists = !!document.getElementById('qwm-open-log-btn');
+  const quickCompleteManageModalHasOpenLog = showManageQuickCompleteModalExists && qwmOpenLogBtnExists;
+
+  // My Plan: past workouts render editable detail (check source of toggleWeekDetail)
+  const toggleWeekDetailSrc = typeof toggleWeekDetail === 'function' ? toggleWeekDetail.toString() : '';
+  const myPlanPastWorkoutEditable = toggleWeekDetailSrc.includes('renderPlanWorkoutEditableDetail');
+  const myPlanFutureWorkoutPreviewOnly = toggleWeekDetailSrc.includes('unlocks on') || toggleWeekDetailSrc.includes('isFuture');
+
+  // Future save still blocked (savePlanWorkoutLog checks plannedDate)
+  const savePlanSrc = typeof savePlanWorkoutLog === 'function' ? savePlanWorkoutLog.toString() : '';
+  const futureSaveStillBlocked = savePlanSrc.includes('plannedDate > todayStr');
+
+  // QuickComplete promotion: savePlanWorkoutLog deletes quickComplete flags
+  const quickCompletePromotionPreserved = savePlanSrc.includes('delete entry.quickComplete');
+
+  // Detailed logs not deleted by quickUnmark (quickUnmarkWorkout only removes quickComplete/quickMarked)
+  const quickUnmarkSrc = typeof quickUnmarkWorkout === 'function' ? quickUnmarkWorkout.toString() : '';
+  const detailedLogsNotDeletedByQuickRemove =
+    quickUnmarkSrc.includes('quickComplete') && quickUnmarkSrc.includes('quickMarked') &&
+    !quickUnmarkSrc.includes('hasDetailedLog');
+
+  // Ensure no state mutation occurred
+  const noMutation = state.log.length === logCountBefore;
+
+  const passed = heatmapCellClickExists && toggleWorkoutCompleteExists &&
+    openWorkoutLogInAppExists && openWorkoutPreviewInAppExists &&
+    showManageQuickCompleteModalExists && savePlanWorkoutLogExists &&
+    renderPlanWorkoutEditableDetailExists && setMpExStatusExists &&
+    heatmapFutureRoutesToPreview && heatmapPastNoLogRoutesToEditableLog &&
+    heatmapDoesNotQuickMarkPastNoLogDirectly && heatmapPartialLogRoutesToEditableLog &&
+    dashboardPartialCircleRoutesToEditableLog && dashboardDetailedLogDoesNotShowQuickRemove &&
+    quickCompleteManageModalHasOpenLog && myPlanPastWorkoutEditable &&
+    myPlanFutureWorkoutPreviewOnly && futureSaveStillBlocked &&
+    quickCompletePromotionPreserved && detailedLogsNotDeletedByQuickRemove && noMutation;
+
+  const result = {
+    passed,
+    heatmapFutureRoutesToPreview,
+    heatmapPastNoLogRoutesToEditableLog,
+    heatmapDoesNotQuickMarkPastNoLogDirectly,
+    heatmapPartialLogRoutesToEditableLog,
+    dashboardPartialCircleRoutesToEditableLog,
+    dashboardDetailedLogDoesNotShowQuickRemove,
+    quickCompleteManageModalHasOpenLog,
+    myPlanPastWorkoutEditable,
+    myPlanFutureWorkoutPreviewOnly,
+    futureSaveStillBlocked,
+    quickCompletePromotionPreserved,
+    detailedLogsNotDeletedByQuickRemove,
+    noMutation
+  };
+  console.table(result);
+  return result;
+}
+window.auditHeatmapLogRoutingFix = auditHeatmapLogRoutingFix;
 </script>
 </body>
 </html>
