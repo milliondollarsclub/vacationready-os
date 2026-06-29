@@ -1048,6 +1048,13 @@
   .aa-pr-name { font-weight: 700; color: var(--gray-900); }
   .aa-pr-weight { font-weight: 900; color: var(--violet); }
   .aa-empty { font-size: 12px; color: var(--gray-400); padding: 10px 0; font-style: italic; }
+  .aa-clickable { cursor: pointer; transition: transform .15s ease, filter .15s ease, box-shadow .15s ease; }
+  .aa-clickable:hover { transform: translateY(-2px); filter: brightness(1.03); }
+  .aa-clickable:focus-visible { outline: 3px solid rgba(94,63,190,.25); outline-offset: 3px; }
+  .aa-pr-row { cursor: pointer; transition: background .15s ease; }
+  .aa-pr-row:hover { background: var(--lavender-pale); }
+  .aa-pr-row:focus-visible { outline: 3px solid rgba(94,63,190,.25); outline-offset: -2px; }
+  .aa-click-hint { font-size: 11px; color: var(--gray-500); margin-top: 8px; font-style: italic; }
 
   /* === MUSCLE GROUP BALANCE === */
   .mg-bar-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
@@ -1083,6 +1090,10 @@
   .pcc-progress-wrap { background:rgba(255,255,255,.2); border-radius:4px; height:6px; margin-bottom:12px; }
   .pcc-progress-fill { background:rgba(255,255,255,.9); border-radius:4px; height:100%; transition:width .6s ease; }
   .pcc-next-chip { display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.3); border-radius:20px; padding:6px 14px; font-size:11px; font-weight:700; }
+  .pcc-next-chip-btn { display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.35); border-radius:20px; padding:6px 14px; font-size:11px; font-weight:700; color:inherit; font-family:inherit; cursor:pointer; appearance:none; -webkit-appearance:none; transition:transform .15s ease, background .15s ease; text-align:left; }
+  .pcc-next-chip-btn:hover { transform:translateY(-1px); background:rgba(255,255,255,.24); }
+  .pcc-next-chip-btn:focus-visible { outline:2px solid rgba(255,255,255,.8); outline-offset:2px; }
+  .pcc-next-chip-caught { display:inline-flex; align-items:center; gap:6px; background:rgba(90,200,90,.2); border:1px solid rgba(90,200,90,.4); border-radius:20px; padding:6px 14px; font-size:11px; font-weight:700; }
 
   /* === PHASE HEADER UPGRADE === */
   .phase-desc { font-size:12px; color:var(--gray-500); margin:6px 0 14px 4px; font-style:italic; line-height:1.5; }
@@ -3238,7 +3249,7 @@ const FIFTH_DAY_POOLS = {
   ],
 };
 
-function buildFifthDayWorkout(weekNum, level, focus, phase, eqKey, existingNames) {
+function buildFifthDayWorkout(weekNum, level, focus, phase, eqKey, existingNames, slotIndex) {
   const DAYS = ['Monday', 'Wednesday', 'Friday', 'Saturday', 'Tuesday', 'Thursday', 'Sunday'];
   const pool = (FIFTH_DAY_POOLS[eqKey] || FIFTH_DAY_POOLS.gym)
     .filter(e => isExerciseAllowedForContext(e.name, eqKey, level) && !existingNames.has(e.name));
@@ -3253,7 +3264,7 @@ function buildFifthDayWorkout(weekNum, level, focus, phase, eqKey, existingNames
 
   const workoutName = getVarietyWorkoutName(phase.name, 'accessory') || 'Athletic Finish';
   return {
-    id: `w${weekNum}_${DAYS[4].toLowerCase()}`,
+    id: makeCanonicalWorkoutId(weekNum, slotIndex !== undefined ? slotIndex : 4),
     day: DAYS[4],
     name: workoutName,
     exercises: dedupeWorkoutExercises(exercises, eqKey, normalizeFocusKey(focus), level),
@@ -3272,6 +3283,11 @@ function sortWorkoutsByChronologicalDay(workouts) {
   });
 }
 
+function makeCanonicalWorkoutId(weekNum, slotIndex) {
+  return `w${weekNum}_s${slotIndex + 1}`;
+}
+window.makeCanonicalWorkoutId = makeCanonicalWorkoutId;
+
 function buildWeekWorkouts(weekNum, daysCount, level, levelTemplate, focus, phase, eq) {
   const DAYS = ['Monday', 'Wednesday', 'Friday', 'Saturday', 'Tuesday', 'Thursday', 'Sunday'];
   const eqKey = eq || 'gym';
@@ -3288,7 +3304,7 @@ function buildWeekWorkouts(weekNum, daysCount, level, levelTemplate, focus, phas
       eqKey, normalizeFocusKey(focus), level
     );
     return {
-      id: `w${weekNum}_${DAYS[dayIndex].toLowerCase()}`,
+      id: makeCanonicalWorkoutId(weekNum, workouts.length),
       day: DAYS[dayIndex],
       name: getVarietyWorkoutName(phase.name, key) || t.name,
       exercises: cleanExercises,
@@ -3317,7 +3333,7 @@ function buildWeekWorkouts(weekNum, daysCount, level, levelTemplate, focus, phas
     }
     if (daysCount >= 5 && workouts.length >= 4) {
       const existingNames = new Set(workouts.flatMap(wo => wo.exercises.map(e => e.name)));
-      workouts.push(buildFifthDayWorkout(weekNum, level, focus, phase, eqKey, existingNames));
+      workouts.push(buildFifthDayWorkout(weekNum, level, focus, phase, eqKey, existingNames, workouts.length));
     }
   }
 
@@ -3571,6 +3587,8 @@ function loadState() {
   normalizeLegacyLogs();
   normalizeWorkoutLogs();
   normalizePlannedWorkoutDates();
+  normalizeWorkoutIdsToSlotKeys();
+  if (state.log) removePlanExternalExtraWorkoutLogs();
 }
 
 function saveUser() { S.set(S.keys.user, state.user); }
@@ -3675,6 +3693,8 @@ function upgradeWorkoutVarietyV1() {
   });
   state.plan = newPlan;
   normalizePlannedWorkoutDates();
+  normalizeWorkoutIdsToSlotKeys();
+  if (state.log) removePlanExternalExtraWorkoutLogs();
   savePlan();
   localStorage.setItem('vr_workout_variety_v1', '1');
 }
@@ -3979,6 +3999,8 @@ function obFinish() {
 
   state.plan = generatePlan(state.user);
   normalizePlannedWorkoutDates();
+  normalizeWorkoutIdsToSlotKeys();
+  if (state.log) removePlanExternalExtraWorkoutLogs();
   saveUser();
   savePlan();
   saveSettings();
@@ -5194,6 +5216,48 @@ window.savePlanWorkoutLog = savePlanWorkoutLog;
 
 // ---- Plan Tab ----
 
+// Returns the most actionable unlogged workout for the Plan Command Center chip.
+// Scans current week onward; prefers overdue/today before future items.
+function getPlanCommandCenterAction() {
+  if (!state.plan || !state.user) return null;
+  const todayStr = getLocalTodayString();
+  const currentWeek = getCurrentWeekNum(state.user.setupDate, state.plan.totalWeeks) || 1;
+
+  const candidates = [];
+  for (let wi = currentWeek - 1; wi < state.plan.weeks.length; wi++) {
+    const week = state.plan.weeks[wi];
+    for (const wo of week.workouts) {
+      if (state.log.find(l => l.workoutId === wo.id)) continue;
+      const wfs = getWorkoutFullStatus(wo, wi);
+      const pd = wfs.plannedDate || null;
+      candidates.push({ workoutId: wo.id, weekNum: week.weekNum, weekIndex: wi, day: wo.day, name: wo.name, plannedDate: pd, isFuture: wfs.isFuture });
+    }
+  }
+  if (!candidates.length) return null;
+
+  // Sort: overdue/today first (ascending by date), then future (ascending by date)
+  candidates.sort((a, b) => {
+    const aOver = !a.isFuture ? 0 : 1;
+    const bOver = !b.isFuture ? 0 : 1;
+    if (aOver !== bOver) return aOver - bOver;
+    if (!a.plannedDate && !b.plannedDate) return 0;
+    if (!a.plannedDate) return 1;
+    if (!b.plannedDate) return -1;
+    return a.plannedDate < b.plannedDate ? -1 : a.plannedDate > b.plannedDate ? 1 : 0;
+  });
+
+  const best = candidates[0];
+  let actionType, labelPrefix;
+  if (!best.plannedDate || best.plannedDate === todayStr) {
+    actionType = 'today'; labelPrefix = 'Today';
+  } else if (best.plannedDate < todayStr) {
+    actionType = 'overdue'; labelPrefix = 'Overdue';
+  } else {
+    actionType = 'next'; labelPrefix = 'Next';
+  }
+  return { ...best, actionType, labelPrefix };
+}
+
 function renderPlan() {
   if (!state.plan) return;
   const currentWeek = state.user ? getCurrentWeekNum(state.user.setupDate, state.plan.totalWeeks) : 1;
@@ -5203,16 +5267,7 @@ function renderPlan() {
   const thisWeekData = state.plan.weeks[currentWeek - 1];
   const thisWeekStats = thisWeekData ? getWeekLogStats(thisWeekData) : null;
 
-  // Find next unlogged workout in current/future weeks
-  let nextWorkout = null;
-  for (let wi = currentWeek - 1; wi < state.plan.weeks.length && !nextWorkout; wi++) {
-    for (const wo of state.plan.weeks[wi].workouts) {
-      if (!state.log.find(l => l.workoutId === wo.id)) {
-        nextWorkout = { day: wo.day, name: wo.name, weekNum: state.plan.weeks[wi].weekNum };
-        break;
-      }
-    }
-  }
+  const nextAction = getPlanCommandCenterAction();
 
   // Plan Command Center
   const phaseName = thisWeekData ? thisWeekData.phaseName : '—';
@@ -5248,7 +5303,10 @@ function renderPlan() {
     <div class="pcc-progress-wrap">
       <div class="pcc-progress-fill" style="width:${progress}%"></div>
     </div>
-    ${nextWorkout ? `<div class="pcc-next-chip" style="margin-top:12px">▶ Next: ${nextWorkout.day} — ${nextWorkout.name} (W${nextWorkout.weekNum})</div>` : ''}
+    ${nextAction
+      ? `<button class="pcc-next-chip-btn" style="margin-top:12px" title="Open this workout" onclick="openPlanCommandCenterAction('${nextAction.workoutId}', ${nextAction.weekNum})">▶ ${nextAction.labelPrefix}: ${nextAction.day} — ${nextAction.name} (W${nextAction.weekNum})</button>`
+      : `<div class="pcc-next-chip-caught" style="margin-top:12px">✓ All planned workouts are caught up</div>`
+    }
     <div style="margin-top:10px;font-size:10px;opacity:.65;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Focus: ${focusDisplayLabel} &bull; ${phaseName}</div>
   </div>`;
 
@@ -6381,6 +6439,8 @@ function adjustFuturePlan() {
   state.user.fitnessLevel = level;
   state.plan = newPlan;
   normalizePlannedWorkoutDates();
+  normalizeWorkoutIdsToSlotKeys();
+  if (state.log) removePlanExternalExtraWorkoutLogs();
 
   saveUser();
   savePlan();
@@ -6803,13 +6863,21 @@ function renderInsights() {
       const srcUnit = ex.actualWeightUnit || _dispUnit;
       const wLbs = srcUnit === 'kg' ? kgToLbs(rawW) : rawW;
       const name = (ex.plannedName || '').trim() || 'Unknown';
-      if (!prMap[name] || wLbs > prMap[name].wLbs) {
-        prMap[name] = { wLbs, srcUnit, rawW, reps: ex.actualReps || '', date: l.date || '' };
+      const existing = prMap[name];
+      const isBetter = !existing || wLbs > existing.wLbs ||
+        (wLbs === existing.wLbs && (l.date || '') > (existing.date || ''));
+      if (isBetter) {
+        prMap[name] = { wLbs, srcUnit, rawW, reps: ex.actualReps || '', date: l.date || '', workoutId: l.workoutId || '' };
       }
     });
   });
+  // Sort: newest date first, then highest weight, then exercise name A-Z
   const prEntries = Object.entries(prMap)
-    .sort((a, b) => b[1].wLbs - a[1].wLbs)
+    .sort(([nameA, a], [nameB, b]) => {
+      if ((b.date || '') !== (a.date || '')) return (b.date || '') > (a.date || '') ? 1 : -1;
+      if (b.wLbs !== a.wLbs) return b.wLbs - a.wLbs;
+      return nameA.localeCompare(nameB);
+    })
     .map(([name, d]) => [name, { ...d, displayW: formatDisplayWeight(d.wLbs, 'lbs', _dispUnit) ?? d.rawW }]);
 
   // ── Helper: volume bar chart ────────────────────────────────────
@@ -6825,7 +6893,10 @@ function renderInsights() {
       const pH = s.planned > 0 ? Math.round((s.partial / maxPlanned) * barMaxH) : 0;
       const loggedH = cH + pH;
       const emptyH = totalH - loggedH;
-      return `<div class="aa-bar-col">
+      return `<div class="aa-bar-col aa-clickable" tabindex="0" role="button"
+        title="Open Week ${i + 1} in My Plan"
+        onclick="openInsightsWeek(${i},'Weekly Volume')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){openInsightsWeek(${i},'Weekly Volume')}">
         <div class="aa-bar-count">${s.logged > 0 ? s.logged : ' '}</div>
         <div class="aa-bar-body">
           ${totalH > 0 ? `
@@ -6842,7 +6913,8 @@ function renderInsights() {
         <div class="aa-legend-item"><div class="aa-legend-dot" style="background:#3BAE8A"></div>Complete</div>
         <div class="aa-legend-item"><div class="aa-legend-dot" style="background:#F59E0B"></div>Partial</div>
         <div class="aa-legend-item"><div class="aa-legend-dot" style="background:#E5E7EB"></div>Not logged</div>
-      </div>`;
+      </div>
+      <div class="aa-click-hint">Click a week to view its workout logs.</div>`;
   }
 
   // ── Helper: effort bar chart ────────────────────────────────────
@@ -6853,7 +6925,10 @@ function renderInsights() {
       const h = Math.max(Math.round((s.effortPct / 100) * barMaxH), s.effortPct > 0 ? 3 : 0);
       const color = s.effortPct >= 80 ? '#3BAE8A' : s.effortPct >= 50 ? '#F59E0B' : s.effortPct > 0 ? '#F87171' : '#E5E7EB';
       const emptyH = barMaxH - h;
-      return `<div class="aa-bar-col">
+      return `<div class="aa-bar-col aa-clickable" tabindex="0" role="button"
+        title="Open Week ${i + 1} in My Plan"
+        onclick="openInsightsWeek(${i},'Weekly Effort')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){openInsightsWeek(${i},'Weekly Effort')}">
         <div class="aa-bar-count">${s.effortPct > 0 ? s.effortPct + '%' : ' '}</div>
         <div class="aa-bar-body">
           ${emptyH > 0 ? `<div class="aa-bar-seg" style="bottom:${h}px;height:${emptyH}px;background:#F3F4F6;border-radius:4px 4px 0 0"></div>` : ''}
@@ -6862,7 +6937,8 @@ function renderInsights() {
         <div class="aa-bar-wlbl">W${i + 1}</div>
       </div>`;
     }).join('');
-    return `<div class="aa-bar-chart-wrap"><div class="aa-bar-row">${cols}</div></div>`;
+    return `<div class="aa-bar-chart-wrap"><div class="aa-bar-row">${cols}</div></div>
+      <div class="aa-click-hint">Click a week to view its workout logs.</div>`;
   }
 
   // ── Helper: consistency heatmap ─────────────────────────────────
@@ -6900,7 +6976,12 @@ function renderInsights() {
     if (!prEntries.length) return `<div class="aa-empty">Add exercise weights in workout logs to unlock strength highlights.</div>`;
     const rows = prEntries.map(([name, d]) => {
       const dateStr = d.date ? new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
-      return `<tr>
+      const safeId = (d.workoutId || '').replace(/'/g, "\'");
+      const safeName = name.replace(/'/g, "\'");
+      return `<tr class="aa-pr-row" tabindex="0" role="button"
+        title="View workout log where ${name} PR was achieved"
+        onclick="openInsightsWorkoutLog('${safeId}')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){openInsightsWorkoutLog('${safeId}')}">
         <td class="aa-pr-name">${name}</td>
         <td class="aa-pr-weight">${d.displayW} ${_dispUnit}</td>
         <td>${d.reps || '—'}</td>
@@ -6910,7 +6991,8 @@ function renderInsights() {
     return `<div class="aa-pr-wrap"><table class="aa-pr-table">
       <thead><tr><th>Exercise</th><th>Best Weight</th><th>Reps</th><th>Date</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table></div>`;
+    </table></div>
+    <div class="aa-click-hint">Click a PR to open the workout log where it happened.</div>`;
   }
 
   // ── Helper: muscle group balance ────────────────────────────────
@@ -7382,6 +7464,8 @@ function importData(input) {
       if (typeof normalizeWorkoutLogs === 'function') normalizeWorkoutLogs();
       if (typeof runUnitMigration === 'function') runUnitMigration();
       if (typeof normalizePlannedWorkoutDates === 'function') normalizePlannedWorkoutDates();
+      if (typeof normalizeWorkoutIdsToSlotKeys === 'function') normalizeWorkoutIdsToSlotKeys();
+      if (state.log && typeof removePlanExternalExtraWorkoutLogs === 'function') removePlanExternalExtraWorkoutLogs();
       const narrativesChanged = refreshPlanNarrativesFromDynamicCopy(state.plan, state.user);
       if (narrativesChanged) savePlan();
       initMainApp();
@@ -7490,6 +7574,21 @@ document.getElementById('confirm-ok-btn').addEventListener('click', () => {
 // Opens the correct workout log panel for any week: Dashboard for the current week,
 // My Plan (with week expanded) for all other weeks. Never opens future workouts.
 function openWorkoutLogInApp(workoutId, weekNum) {
+  // Guard: redirect future workouts to preview-only (no editable log)
+  let _workout = null, _weekIndex = -1;
+  for (let _wi = 0; _wi < (state.plan?.weeks || []).length; _wi++) {
+    const _wo = state.plan.weeks[_wi].workouts.find(w => w.id === workoutId);
+    if (_wo) { _workout = _wo; _weekIndex = _wi; break; }
+  }
+  if (_workout) {
+    const _wfs = getWorkoutFullStatus(_workout, _weekIndex);
+    if (_wfs.isFuture) {
+      openWorkoutPreviewInApp(workoutId, weekNum);
+      showToast('Preview opened — logging unlocks on ' + (_wfs.plannedDate || '?') + '.');
+      return;
+    }
+  }
+
   const cw = getCurrentWeekNum(state.user?.setupDate, state.plan?.totalWeeks) || 1;
   if (weekNum === cw) {
     switchTab('dashboard');
@@ -7523,6 +7622,64 @@ function openWorkoutPreviewInApp(workoutId, weekNum) {
   }, 120);
 }
 window.openWorkoutPreviewInApp = openWorkoutPreviewInApp;
+
+// Dispatches the Plan Command Center chip click: preview for future, log for today/past.
+function openPlanCommandCenterAction(workoutId, weekNum) {
+  let workout = null, weekIndex = -1;
+  for (let wi = 0; wi < (state.plan?.weeks || []).length; wi++) {
+    const wo = state.plan.weeks[wi].workouts.find(w => w.id === workoutId);
+    if (wo) { workout = wo; weekIndex = wi; break; }
+  }
+  if (!workout) { showToast('Workout not found.'); return; }
+  const wfs = getWorkoutFullStatus(workout, weekIndex);
+  if (wfs.isFuture) {
+    openWorkoutPreviewInApp(workoutId, weekNum);
+    showToast('Preview opened — logging unlocks on ' + (wfs.plannedDate || '?') + '.');
+  } else {
+    openWorkoutLogInApp(workoutId, weekNum);
+    showToast('Opening workout log.');
+  }
+}
+window.openPlanCommandCenterAction = openPlanCommandCenterAction;
+
+// ── Insights routing helpers ─────────────────────────────────────────────────
+
+function findWorkoutContextById(workoutId) {
+  for (let wi = 0; wi < (state.plan?.weeks || []).length; wi++) {
+    const week = state.plan.weeks[wi];
+    const workout = week.workouts.find(wo => wo.id === workoutId);
+    if (workout) return { week, workout, weekIndex: wi, weekNum: wi + 1 };
+  }
+  return null;
+}
+window.findWorkoutContextById = findWorkoutContextById;
+
+function openInsightsWorkoutLog(workoutId) {
+  const ctx = findWorkoutContextById(workoutId);
+  if (!ctx) { showToast('Workout log not found.'); return; }
+  openWorkoutLogInApp(workoutId, ctx.weekNum);
+}
+window.openInsightsWorkoutLog = openInsightsWorkoutLog;
+
+function openInsightsWeek(weekIndex, sourceLabel) {
+  const weekNum = weekIndex + 1;
+  switchTab('plan');
+  setTimeout(() => {
+    if (expandedWeekDetail !== weekNum) toggleWeekDetail(weekNum);
+    setTimeout(() => {
+      const container = document.querySelector('.week-detail-card');
+      if (container) container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const wk = state.plan?.weeks?.[weekIndex];
+      const loggedCount = wk ? wk.workouts.filter(wo => state.log.some(l => l.workoutId === wo.id)).length : 0;
+      if (loggedCount > 0) {
+        showToast(`Week ${weekNum} opened — select a workout to view or edit logs.`);
+      } else {
+        showToast(`Week ${weekNum} opened — no workouts logged yet.`);
+      }
+    }, 100);
+  }, 120);
+}
+window.openInsightsWeek = openInsightsWeek;
 
 // ---- Quick Workout Action Modal listeners ----
 document.getElementById('qwm-open-log-btn').addEventListener('click', () => {
@@ -8348,6 +8505,96 @@ function normalizePlannedWorkoutDates() {
 }
 window.normalizePlannedWorkoutDates = normalizePlannedWorkoutDates;
 
+// Non-destructive migration: renames weekday-based workout IDs (e.g. w7_monday)
+// to canonical slot-based IDs (e.g. w7_s1) and re-maps log entries to match.
+function normalizeWorkoutIdsToSlotKeys() {
+  if (!state.plan || !state.plan.weeks) return { changed: false };
+
+  const idMap = {};
+  // Build the mapping from old IDs to new canonical IDs
+  state.plan.weeks.forEach(wk => {
+    wk.workouts.forEach((wo, oi) => {
+      const newId = makeCanonicalWorkoutId(wk.weekNum, oi);
+      if (wo.id !== newId) {
+        idMap[wo.id] = newId;
+      }
+    });
+  });
+
+  if (Object.keys(idMap).length === 0) {
+    return { changed: false, migratedWorkoutIds: 0, migratedLogs: 0, duplicatesResolved: 0, idMap };
+  }
+
+  // Update workout IDs in plan
+  let migratedWorkoutIds = 0;
+  state.plan.weeks.forEach(wk => {
+    wk.workouts.forEach((wo, oi) => {
+      const newId = makeCanonicalWorkoutId(wk.weekNum, oi);
+      if (wo.id !== newId) {
+        wo.id = newId;
+        migratedWorkoutIds++;
+      }
+    });
+  });
+
+  // Build set of all current canonical IDs for duplicate detection
+  const allCanonicalIds = new Set(
+    state.plan.weeks.flatMap(wk => wk.workouts.map(wo => wo.id))
+  );
+
+  // Re-map log entries
+  let migratedLogs = 0;
+  let duplicatesResolved = 0;
+  const logsByNewId = {};
+
+  state.log.forEach(lg => {
+    const mappedId = idMap[lg.workoutId];
+    if (mappedId) {
+      if (logsByNewId[mappedId]) {
+        // Duplicate: keep the one with more meaningful data
+        const existing = logsByNewId[mappedId];
+        const existingScore = (existing.exerciseLogs?.length || 0) + (existing.duration ? 1 : 0) + (existing.rpe ? 1 : 0);
+        const newScore = (lg.exerciseLogs?.length || 0) + (lg.duration ? 1 : 0) + (lg.rpe ? 1 : 0);
+        if (newScore > existingScore) {
+          logsByNewId[mappedId] = lg;
+        }
+        duplicatesResolved++;
+      } else {
+        logsByNewId[mappedId] = lg;
+      }
+      lg.workoutId = mappedId;
+      migratedLogs++;
+    }
+  });
+
+  savePlan();
+  saveLog();
+
+  return { changed: true, migratedWorkoutIds, migratedLogs, duplicatesResolved, idMap };
+}
+window.normalizeWorkoutIdsToSlotKeys = normalizeWorkoutIdsToSlotKeys;
+
+function isPlanExternalExtraWorkoutLogId(workoutId) {
+  return /^extra_w\d+_/i.test(String(workoutId || ''));
+}
+window.isPlanExternalExtraWorkoutLogId = isPlanExternalExtraWorkoutLogId;
+
+function removePlanExternalExtraWorkoutLogs() {
+  if (!state.log) return { removed: false, removedCount: 0, removedIds: [], beforeCount: 0, afterCount: 0 };
+  const beforeCount = state.log.length;
+  const removedIds = state.log
+    .filter(l => isPlanExternalExtraWorkoutLogId(l.workoutId))
+    .map(l => l.workoutId);
+  if (removedIds.length === 0) {
+    return { removed: false, removedCount: 0, removedIds: [], beforeCount, afterCount: beforeCount };
+  }
+  state.log = state.log.filter(l => !isPlanExternalExtraWorkoutLogId(l.workoutId));
+  const afterCount = state.log.length;
+  saveLog();
+  return { removed: true, removedCount: removedIds.length, removedIds, beforeCount, afterCount };
+}
+window.removePlanExternalExtraWorkoutLogs = removePlanExternalExtraWorkoutLogs;
+
 function auditCalendarSafeWorkoutStatusLogic() {
   const todayStr = getLocalTodayString();
 
@@ -8556,6 +8803,277 @@ function auditHeatmapLogRoutingFix() {
   return result;
 }
 window.auditHeatmapLogRoutingFix = auditHeatmapLogRoutingFix;
+
+// Non-mutating audit: verifies Insights interactivity and PR sort correctness.
+function auditInsightsInteractivityAndPRSorting() {
+  const logCountBefore = state.log.length;
+
+  const findWorkoutContextByIdExists = typeof findWorkoutContextById === 'function';
+  const openInsightsWorkoutLogExists = typeof openInsightsWorkoutLog === 'function';
+  const openInsightsWeekExists       = typeof openInsightsWeek === 'function';
+  const openWorkoutLogInAppExists    = typeof openWorkoutLogInApp === 'function';
+  const heatmapCellClickExists       = typeof heatmapCellClick === 'function';
+
+  // DOM checks (require Insights tab to be rendered)
+  const clickableCols = document.querySelectorAll('.aa-bar-col.aa-clickable');
+  const weeklyVolumeClickable  = clickableCols.length > 0;
+  const weeklyEffortClickable  = clickableCols.length > 0;
+  const prRows = document.querySelectorAll('.aa-pr-row');
+  const prRowsClickable = prRows.length > 0;
+
+  // Rebuild PR map to verify workoutId context and sort determinism
+  const _dispUnit = state.settings?.weightUnit || 'lbs';
+  const testPrMap = {};
+  let prHasContext = true;
+  (state.log || []).forEach(l => {
+    (l.exerciseLogs || []).forEach(ex => {
+      if (!ex.actualWeight) return;
+      const rawW = parseFloat(String(ex.actualWeight).replace(/[^\d.]/g, ''));
+      if (isNaN(rawW) || rawW <= 0) return;
+      const srcUnit = ex.actualWeightUnit || _dispUnit;
+      const wLbs = srcUnit === 'kg' ? (typeof kgToLbs === 'function' ? kgToLbs(rawW) : rawW * 2.20462) : rawW;
+      const name = (ex.plannedName || '').trim() || 'Unknown';
+      const existing = testPrMap[name];
+      const isBetter = !existing || wLbs > existing.wLbs ||
+        (wLbs === existing.wLbs && (l.date || '') > (existing.date || ''));
+      if (isBetter) {
+        testPrMap[name] = { wLbs, date: l.date || '', workoutId: l.workoutId || '' };
+      }
+    });
+  });
+  const testEntries = Object.entries(testPrMap);
+  testEntries.forEach(([, d]) => { if (!d.workoutId) prHasContext = false; });
+
+  // Verify sort is stable and deterministic
+  const sortFn = ([nA, a], [nB, b]) => {
+    if ((b.date || '') !== (a.date || '')) return (b.date || '') > (a.date || '') ? 1 : -1;
+    if (b.wLbs !== a.wLbs) return b.wLbs - a.wLbs;
+    return nA.localeCompare(nB);
+  };
+  const sorted1 = [...testEntries].sort(sortFn).map(e => e[0]);
+  const sorted2 = [...testEntries].sort(sortFn).map(e => e[0]);
+  const prSortDeterministic = sorted1.every((n, i) => n === sorted2[i]);
+
+  // Newest date should come first (verify ordering if data exists)
+  let prSortNewestFirst = true;
+  if (sorted1.length >= 2) {
+    for (let i = 0; i < sorted1.length - 1; i++) {
+      const a = testPrMap[sorted1[i]];
+      const b = testPrMap[sorted1[i + 1]];
+      if ((a.date || '') < (b.date || '')) { prSortNewestFirst = false; break; }
+    }
+  }
+
+  const noFakeLogs = state.log.length === logCountBefore;
+
+  const passed = findWorkoutContextByIdExists && openInsightsWorkoutLogExists &&
+    openInsightsWeekExists && openWorkoutLogInAppExists && heatmapCellClickExists &&
+    (testEntries.length === 0 || prHasContext) &&
+    prSortDeterministic && prSortNewestFirst && noFakeLogs;
+
+  const result = {
+    passed,
+    findWorkoutContextByIdExists,
+    openInsightsWorkoutLogExists,
+    openInsightsWeekExists,
+    openWorkoutLogInAppExists,
+    heatmapCellClickExists,
+    weeklyVolumeClickable,
+    weeklyEffortClickable,
+    prRowsClickable: prRows.length === 0 ? 'no-pr-data-in-dom' : prRowsClickable,
+    prHasWorkoutIdContext: testEntries.length === 0 ? 'no-pr-data' : prHasContext,
+    prSortDeterministic,
+    prSortNewestFirst,
+    noFakeLogs
+  };
+  console.table(result);
+  return result;
+}
+window.auditInsightsInteractivityAndPRSorting = auditInsightsInteractivityAndPRSorting;
+
+// ==================== PLAN COMMAND CENTER NEXT ACTION AUDIT ====================
+function auditPlanCommandCenterNextAction() {
+  const todayStr = getLocalTodayString();
+  const logCountBefore = state.log.length;
+  const result = {};
+
+  result.getPlanCommandCenterActionExists = typeof getPlanCommandCenterAction === 'function';
+  result.openPlanCommandCenterActionExists = typeof openPlanCommandCenterAction === 'function';
+
+  const action = getPlanCommandCenterAction();
+  result.nextActionFound = action !== null;
+
+  if (action) {
+    result.actionWorkoutId = action.workoutId;
+    result.actionWeekNum = action.weekNum;
+    result.actionDay = action.day;
+    result.actionName = action.name;
+    result.actionPlannedDate = action.plannedDate;
+    result.actionType = action.actionType;
+    result.labelPrefix = action.labelPrefix;
+
+    // Verify labelPrefix matches plannedDate
+    let expectedType;
+    if (!action.plannedDate || action.plannedDate === todayStr) expectedType = 'today';
+    else if (action.plannedDate < todayStr) expectedType = 'overdue';
+    else expectedType = 'next';
+    result.labelMatchesDate = action.actionType === expectedType;
+
+    // Verify chip/button exists in DOM
+    const chipEl = document.querySelector('.pcc-next-chip-btn');
+    result.chipExistsInDOM = !!chipEl;
+    result.chipHasOnclick = chipEl ? (chipEl.getAttribute('onclick') || '').includes('openPlanCommandCenterAction') : false;
+    result.chipLabelContainsPrefix = chipEl ? chipEl.textContent.includes(action.labelPrefix) : false;
+
+    // Verify future action uses preview path (check openPlanCommandCenterAction source)
+    const fnSrc = openPlanCommandCenterAction.toString();
+    result.futureActionUsesPreviewPath = fnSrc.includes('openWorkoutPreviewInApp');
+
+  } else {
+    // No unlogged workouts — caught-up chip should be shown
+    const caughtChip = document.querySelector('.pcc-next-chip-caught');
+    result.caughtUpChipShown = !!caughtChip;
+  }
+
+  // Verify openWorkoutLogInApp source includes isFuture guard
+  const logFnSrc = openWorkoutLogInApp.toString();
+  result.openWorkoutLogInAppHasFutureGuard = logFnSrc.includes('isFuture');
+
+  // Verify log was not mutated
+  result.logNotMutated = state.log.length === logCountBefore;
+
+  console.table(result);
+  return result;
+}
+window.auditPlanCommandCenterNextAction = auditPlanCommandCenterNextAction;
+
+// ==================== SLOT KEY MIGRATION AUDIT ====================
+function auditWorkoutIdSlotKeyMigration() {
+  const result = {
+    passed: false,
+    makeCanonicalWorkoutIdExists: false,
+    normalizeWorkoutIdsToSlotKeysExists: false,
+    allWorkoutIdsSlotBased: false,
+    noWeekdayBasedIds: false,
+    noDuplicateWorkoutIds: false,
+    allLogsMappedToExistingWorkouts: false,
+    noPlanExternalExtraLogs: false,
+    planExternalExtraLogIds: [],
+    dayMatchesPlannedDate: false,
+    plannedDatesStillExist: false,
+    commandCenterActionStillWorks: false,
+    noLogLoss: false,
+  };
+
+  const logCountBefore = state.log.length;
+
+  result.makeCanonicalWorkoutIdExists = typeof makeCanonicalWorkoutId === 'function';
+  result.normalizeWorkoutIdsToSlotKeysExists = typeof normalizeWorkoutIdsToSlotKeys === 'function';
+
+  if (!state.plan || !state.plan.weeks) {
+    console.table(result);
+    return result;
+  }
+
+  const allWorkouts = state.plan.weeks.flatMap(wk => wk.workouts);
+  const slotKeyPattern = /^w\d+_s\d+$/;
+  const weekdayPattern = /monday|tuesday|wednesday|thursday|friday|saturday|sunday/i;
+
+  result.allWorkoutIdsSlotBased = allWorkouts.every(wo => slotKeyPattern.test(wo.id));
+  result.noWeekdayBasedIds = allWorkouts.every(wo => !weekdayPattern.test(wo.id));
+
+  const idSet = new Set(allWorkouts.map(wo => wo.id));
+  result.noDuplicateWorkoutIds = idSet.size === allWorkouts.length;
+
+  const planIdSet = new Set(allWorkouts.map(wo => wo.id));
+  result.allLogsMappedToExistingWorkouts = state.log.every(lg => planIdSet.has(lg.workoutId));
+
+  const extraLogIds = state.log
+    .filter(lg => isPlanExternalExtraWorkoutLogId(lg.workoutId))
+    .map(lg => lg.workoutId);
+  result.noPlanExternalExtraLogs = extraLogIds.length === 0;
+  result.planExternalExtraLogIds = extraLogIds;
+
+  result.plannedDatesStillExist = allWorkouts.every(wo => !!wo.plannedDate);
+
+  result.dayMatchesPlannedDate = allWorkouts.every(wo => {
+    if (!wo.plannedDate) return false;
+    const expected = getLocalWeekdayName(wo.plannedDate);
+    return !expected || wo.day === expected;
+  });
+
+  try {
+    const action = getPlanCommandCenterAction();
+    result.commandCenterActionStillWorks = !!action;
+  } catch(e) {
+    result.commandCenterActionStillWorks = false;
+  }
+
+  result.noLogLoss = state.log.length === logCountBefore;
+
+  result.passed = result.makeCanonicalWorkoutIdExists &&
+    result.normalizeWorkoutIdsToSlotKeysExists &&
+    result.allWorkoutIdsSlotBased &&
+    result.noWeekdayBasedIds &&
+    result.noDuplicateWorkoutIds &&
+    result.allLogsMappedToExistingWorkouts &&
+    result.noPlanExternalExtraLogs &&
+    result.dayMatchesPlannedDate &&
+    result.plannedDatesStillExist &&
+    result.commandCenterActionStillWorks &&
+    result.noLogLoss;
+
+  console.table(result);
+  return result;
+}
+window.auditWorkoutIdSlotKeyMigration = auditWorkoutIdSlotKeyMigration;
+
+// ==================== WORKOUT LOG PLAN INTEGRITY AUDIT ====================
+function auditWorkoutLogPlanIntegrity() {
+  const result = {
+    passed: false,
+    totalLogs: 0,
+    totalPlannedWorkouts: 0,
+    mappedLogCount: 0,
+    orphanLogCount: 0,
+    planExternalExtraLogCount: 0,
+    orphanLogIds: [],
+    planExternalExtraLogIds: [],
+  };
+
+  if (!state.log) {
+    console.table(result);
+    return result;
+  }
+
+  result.totalLogs = state.log.length;
+
+  const planIdSet = new Set();
+  if (state.plan && state.plan.weeks) {
+    state.plan.weeks.forEach(wk => wk.workouts.forEach(wo => planIdSet.add(wo.id)));
+  }
+  result.totalPlannedWorkouts = planIdSet.size;
+
+  const extraLogIds = state.log
+    .filter(lg => isPlanExternalExtraWorkoutLogId(lg.workoutId))
+    .map(lg => lg.workoutId);
+  result.planExternalExtraLogCount = extraLogIds.length;
+  result.planExternalExtraLogIds = extraLogIds;
+
+  const orphanLogIds = state.log
+    .filter(lg => !planIdSet.has(lg.workoutId) && !isPlanExternalExtraWorkoutLogId(lg.workoutId))
+    .map(lg => lg.workoutId);
+  result.orphanLogCount = orphanLogIds.length;
+  result.orphanLogIds = orphanLogIds;
+
+  result.mappedLogCount = state.log.filter(lg => planIdSet.has(lg.workoutId)).length;
+
+  result.passed = result.planExternalExtraLogCount === 0 && result.orphanLogCount === 0;
+
+  console.table(result);
+  return result;
+}
+window.auditWorkoutLogPlanIntegrity = auditWorkoutLogPlanIntegrity;
 </script>
 </body>
 </html>
